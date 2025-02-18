@@ -101,6 +101,31 @@ def get_portfolio(client_name):
     result = client.table('portfolios').select("*").eq("client_id", client_id).execute()
     return pd.DataFrame(result.data)
 
+# ✅ NEW Portfolio Creation with Searchable Add System
+def new_portfolio_creation_ui():
+    st.subheader("➕ Add Holdings")
+
+    # Hold current holdings in session state
+    if "portfolio_holdings" not in st.session_state:
+        st.session_state.portfolio_holdings = {}
+
+    selected_stock = st.selectbox("Search and Add Stock or Cash", stocks["valeur"].tolist())
+    quantity = st.number_input("Quantity", min_value=1, value=1)
+
+    if st.button("➕ Add to Holdings"):
+        st.session_state.portfolio_holdings[selected_stock] = quantity
+        st.success(f"Added {quantity} units of {selected_stock} to holdings")
+
+    # Show Current Holdings
+    if st.session_state.portfolio_holdings:
+        st.write("### Current Holdings:")
+        holdings_df = pd.DataFrame([
+            {"valeur": k, "quantité": v} for k, v in st.session_state.portfolio_holdings.items()
+        ])
+        st.dataframe(holdings_df, use_container_width=True)
+
+    return st.session_state.portfolio_holdings
+
 # ✅ Show Portfolio (With Inline Editing & Add/Delete Stock Buttons)
 def show_portfolio(client_name):
     df = get_portfolio(client_name)
@@ -120,22 +145,8 @@ def show_portfolio(client_name):
         num_rows="dynamic"
     )
 
-    # Add Stock or Cash
-    selected_stock = st.selectbox("➕ Add Stock or Cash", stocks["valeur"].tolist(), key=f"add_stock_{client_name}")
-    quantity = st.number_input("Quantity", min_value=1, value=1, key=f"qty_{client_name}")
-    if st.button("➕ Add", key=f"btn_add_{client_name}"):
-        create_portfolio(client_name, {selected_stock: quantity})
-        st.experimental_rerun()
-
-    # Delete Stock
-    if not df.empty:
-        stock_to_remove = st.selectbox("🗑️ Remove Stock", df["valeur"].tolist(), key=f"remove_stock_{client_name}")
-        if st.button("🗑️ Remove", key=f"btn_remove_{client_name}"):
-            client.table('portfolios').delete().eq("client_id", get_client_id(client_name)).eq("valeur", stock_to_remove).execute()
-            st.experimental_rerun()
-
     # Save Changes Button
-    if st.button("💾 Save Portfolio Changes", key=f"save_{client_name}"):
+    if st.button("💾 Save Portfolio Changes"):
         for index, row in edited_df.iterrows():
             updated_valorisation = row["quantité"] * stocks.loc[stocks["valeur"] == row["valeur"], "cours"].values[0]
             client.table('portfolios').update({
@@ -143,7 +154,6 @@ def show_portfolio(client_name):
                 "valorisation": updated_valorisation
             }).eq("client_id", get_client_id(client_name)).eq("valeur", row["valeur"]).execute()
         st.success("Portfolio updated successfully!")
-        st.experimental_rerun()
 
     # Show Total Portfolio Value
     st.write(f"**💰 Valorisation totale du portefeuille:** {total_value:.2f}")
@@ -172,39 +182,25 @@ if page == "Manage Clients":
     st.title("👤 Manage Clients")
     existing_clients = get_all_clients()
 
-    # Add New Client
     with st.form("add_client_form"):
         new_client = st.text_input("New Client Name")
         submitted = st.form_submit_button("➕ Add Client")
         if submitted:
             create_client(new_client)
 
-    # Rename Client
-    with st.form("rename_client_form"):
-        old_name = st.selectbox("Select Client to Rename", options=existing_clients, placeholder="Select...")
-        new_name = st.text_input("New Client Name")
-        rename_submitted = st.form_submit_button("✏️ Rename Client")
-        if rename_submitted:
-            rename_client(old_name, new_name)
-
-    # Delete Client
-    with st.form("delete_client_form"):
-        delete_name = st.selectbox("Select Client to Delete", options=existing_clients, placeholder="Select...")
-        delete_submitted = st.form_submit_button("🗑️ Delete Client")
-        if delete_submitted:
-            delete_client(delete_name)
-
 elif page == "Create Portfolio":
     st.title("📊 Create Client Portfolio")
     existing_clients = get_all_clients()
-    client_name = st.selectbox("Select or Enter Client Name", [""] + existing_clients, placeholder="Select or type...")
+    client_name = st.selectbox("Select or Enter Client Name", [""] + existing_clients)
 
     if client_name:
-        show_portfolio(client_name)
+        initial_holdings = new_portfolio_creation_ui()
+        if st.button("💾 Create Portfolio"):
+            create_portfolio(client_name, initial_holdings)
 
 elif page == "View Client Portfolio":
     st.title("📜 View Client Portfolio")
-    client_name = st.selectbox("Select Client", get_all_clients(), placeholder="Choose a client")
+    client_name = st.selectbox("Select Client", get_all_clients())
     if client_name:
         show_portfolio(client_name)
 
