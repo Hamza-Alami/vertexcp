@@ -63,15 +63,15 @@ def delete_client(client_name):
         client.table('clients').delete().eq("id", client_id).execute()
         st.success(f"Deleted client '{client_name}'")
 
-# ✅ Create Portfolio (With Initial Stocks or Cash)
-def create_portfolio(client_name, initial_stocks):
+# ✅ Create Portfolio (With Search + Add Button for Stocks)
+def create_portfolio(client_name, holdings):
     client_id = get_client_id(client_name)
     if not client_id:
         st.error("Client not found.")
         return
 
     portfolio_rows = []
-    for stock, qty in initial_stocks.items():
+    for stock, qty in holdings.items():
         if qty > 0:
             stock_price = stocks.loc[stocks["valeur"] == stock, "cours"].values[0]
             valorisation = qty * stock_price
@@ -144,6 +144,39 @@ def show_all_portfolios():
         st.write("---")
         show_portfolio(client_name)
 
+# ✅ NEW Portfolio Creation with Searchable Add System
+def new_portfolio_creation_ui():
+    st.subheader("➕ Add Holdings")
+
+    # Hold current holdings in session state
+    if "portfolio_holdings" not in st.session_state:
+        st.session_state.portfolio_holdings = {}
+
+    selected_stock = st.selectbox(
+        "Search and Add Stock or Cash",
+        options=stocks["valeur"].tolist(),
+        placeholder="Search for stock..."
+    )
+    quantity = st.number_input("Quantity", min_value=1, value=1)
+
+    if st.button("➕ Add to Holdings"):
+        if selected_stock in st.session_state.portfolio_holdings:
+            st.warning(f"{selected_stock} already added. Adjust the quantity directly.")
+        else:
+            st.session_state.portfolio_holdings[selected_stock] = quantity
+            st.success(f"Added {quantity} units of {selected_stock} to holdings")
+
+    # Show Current Holdings
+    if st.session_state.portfolio_holdings:
+        st.write("### Current Holdings:")
+        holdings_df = pd.DataFrame([
+            {"valeur": k, "quantité": v} for k, v in st.session_state.portfolio_holdings.items()
+        ])
+        st.dataframe(holdings_df, use_container_width=True)
+
+    return st.session_state.portfolio_holdings
+
+
 # ✅ Streamlit Sidebar Navigation
 page = st.sidebar.selectbox("📂 Navigation", [
     "Manage Clients",
@@ -189,16 +222,12 @@ elif page == "Create Portfolio":
         placeholder="Select or type..."
     )
 
-    st.subheader("📈 Add Initial Holdings")
-    initial_stocks = {}
-    for stock_name in stocks["valeur"].values:
-        qty = st.number_input(f"Quantity of {stock_name}", min_value=0, value=0, key=stock_name)
-        if qty > 0:
-            initial_stocks[stock_name] = qty
+    # NEW DESIGN: Portfolio Creation Using Search & Add
+    initial_holdings = new_portfolio_creation_ui()
 
     if st.button("💾 Create Portfolio"):
         if client_name:
-            create_portfolio(client_name, initial_stocks)
+            create_portfolio(client_name, initial_holdings)
         else:
             st.error("Please enter or select a client name!")
 
