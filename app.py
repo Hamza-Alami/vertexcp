@@ -1,24 +1,31 @@
+
 import streamlit as st
 import pandas as pd
 from supabase import create_client
-import os
+
+# Verify Secrets Loaded
+st.write(f"Detected Secrets Keys: {list(st.secrets.keys())}")
 
 # Connect to Supabase
-supabase_url = st.secrets["supabase"]["url"]
-supabase_key = st.secrets["supabase"]["key"]
+supabase_url = st.secrets.get("supabase", {}).get("url")
+supabase_key = st.secrets.get("supabase", {}).get("key")
+
+if not supabase_url or not supabase_key:
+    st.error("❌ Missing Supabase URL or Key. Check Streamlit Cloud Secrets.")
+    st.stop()
+
 client = create_client(supabase_url, supabase_key)
 
-# Create a new client and portfolio
+# Create Client and Portfolio
 def create_client(name):
     client.table('clients').insert({"name": name}).execute()
     client.table('portfolios').insert({"client_name": name, "stocks": []}).execute()
 
-# Display client portfolios
+# Display Portfolios
 def display_portfolios(selected_clients):
-    query = client.table('portfolios').select("*").execute()
-    df = pd.DataFrame(query.data)
-    filtered = df[df['client_name'].isin(selected_clients)]
-    st.dataframe(filtered)
+    data = client.table('portfolios').select("*").execute().data
+    df = pd.DataFrame(data)
+    st.dataframe(df[df['client_name'].isin(selected_clients)])
 
 # Streamlit UI
 st.title("📊 Client Portfolio Manager")
@@ -30,7 +37,7 @@ with st.form("add_client"):
         st.success(f"Client '{client_name}' created!")
         st.experimental_rerun()
 
-# View portfolios
+# View Portfolios
 all_clients = [c['name'] for c in client.table('clients').select('name').execute().data]
 selected_clients = st.multiselect("Select Clients", all_clients)
 if st.button("Show Portfolios"):
