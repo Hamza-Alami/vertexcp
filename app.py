@@ -137,9 +137,6 @@ def show_portfolio(client_name):
     # Save Changes Button
     if st.button("💾 Save Portfolio Changes", key=f"save_{client_name}"):
         for index, row in edited_df.iterrows():
-            if row["valeur"] == "Cash" and row["quantité"] < 0:
-                st.error("Cash cannot be negative!")
-                return
             updated_valorisation = row["quantité"] * stocks.loc[stocks["valeur"] == row["valeur"], "cours"].values[0]
             client.table('portfolios').update({
                 "quantité": row["quantité"],
@@ -202,6 +199,12 @@ elif page == "Create Portfolio":
     existing_clients = get_all_clients()
     client_name = st.selectbox("Select or Enter Client Name", [""] + existing_clients, placeholder="Select or type...")
 
+    if client_name:
+        show_portfolio(client_name)
+
+elif page == "View Client Portfolio":
+    st.title("📜 View Client Portfolio")
+    client_name = st.selectbox("Select Client", get_all_clients(), placeholder="Choose a client")
     if client_name:
         show_portfolio(client_name)
 
