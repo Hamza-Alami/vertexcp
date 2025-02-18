@@ -1,59 +1,73 @@
+# 💻 Full Steps & Complete Code for Supabase + Streamlit Portfolio App
+
+## 🚀 1️⃣ **Create Supabase Tables:**
+### **1. `clients` Table:**
+- `name`: `text` (Primary Key)
+
+### **2. `portfolios` Table:**
+- `id`: `uuid` (Primary Key)
+- `client_name`: `text` (Foreign Key from `clients`)
+- `name`: `text` (Stock name)
+- `quantity`: `integer`
+- `value`: `float`
+- `cash`: `float`
+
+### **3. `stocks` Table:** *(For `cours` page)*
+- `name`: `text` (Primary Key)
+- `dernier_cours`: `float`
+
+## 🔒 2️⃣ **Supabase Policies:**
+- Enable **`INSERT`, `UPDATE`, `SELECT`** for all tables.
+
+---
+## 📝 3️⃣ **`requirements.txt`:**
+```
+streamlit==1.30.0
+supabase==1.1.0
+pandas==2.2.0
+requests==2.31.0
+```
+
+## 🔑 4️⃣ **`secrets.toml` on Streamlit Cloud:**
+```
+[supabase]
+url = "https://your-supabase-url"
+key = "your-supabase-api-key"
+```
+
+---
+## 🐍 5️⃣ **`app.py` Full Code:**
+```python
 import streamlit as st
 import pandas as pd
 import requests
 from supabase import create_client
 
 # Connect to Supabase
-supabase_url = st.secrets["supabase"]["url"]
-supabase_key = st.secrets["supabase"]["key"]
-client = create_client(supabase_url, supabase_key)
+supabase = create_client(st.secrets['supabase']['url'], st.secrets['supabase']['key'])
 
-# Fetch Stock Data from ID Bourse API
+# 📈 Load Stocks from API
 @st.cache_data
-def get_stock_data():
-    response = requests.get("https://backend.idbourse.com/api_2/get_all_data")
+def get_stocks():
+    response = requests.get('https://backend.idbourse.com/api_2/get_all_data')
     data = response.json()
-    df = pd.DataFrame(data)
-    return df[['name', 'dernier_cours']]
+    stocks = pd.DataFrame([(item['name'], item['dernier_cours']) for item in data], columns=['name', 'dernier_cours'])
+    stocks.loc[len(stocks)] = ['CASH', 1.0]
+    return stocks
 
-stocks = get_stock_data()
+stocks = get_stocks()
 
-# Display Stocks
-st.sidebar.header("📈 Stock Prices")
-st.sidebar.dataframe(stocks)
+# 🧑‍🤝‍🧑 Manage Clients
+client_name = st.text_input("Client Name")
+if st.button("Add Client"):
+    supabase.table('clients').insert({"name": client_name}).execute()
+    st.success(f"Client '{client_name}' added!")
 
-# Manage Clients and Portfolios
-st.title("👤 Client Portfolio Manager")
+# 📊 Show Clients
+clients = [c['name'] for c in supabase.table('clients').select("name").execute().data]
+selected_client = st.selectbox("Select Client", clients)
 
-with st.form("add_client"):
-    client_name = st.text_input("New Client Name")
-    if st.form_submit_button("Add Client"):
-        client.table('clients').insert({"name": client_name}).execute()
-        st.success(f"Client '{client_name}' added!")
-        st.experimental_rerun()
-
-# Show All Clients
-all_clients = [c['name'] for c in client.table('clients').select('name').execute().data]
-selected_client = st.selectbox("Select Client", all_clients)
-
-# Add Stock to Portfolio
-with st.form("add_stock"):
-    stock_name = st.selectbox("Select Stock", stocks['name'].tolist())
-    quantity = st.number_input("Quantity", min_value=1, step=1)
-    if st.form_submit_button("Add to Portfolio"):
-        price = stocks.loc[stocks['name'] == stock_name, 'dernier_cours'].values[0]
-        value = quantity * price
-        client.table('portfolios').insert({
-            "client_id": selected_client,
-            "name": stock_name,
-            "quantity": quantity,
-            "value": value
-        }).execute()
-        st.success(f"Added {quantity} shares of {stock_name}")
-        st.experimental_rerun()
-
-# View Client Portfolio
-if selected_client:
-    portfolio = pd.DataFrame(client.table('portfolios').select('*').eq('client_id', selected_client).execute().data)
-    st.write(f"### Portfolio of {selected_client}")
-    st.dataframe(portfolio[['name', 'quantity', 'value']])
+# 📊 Manage Client Portfolio
+portfolio_data = supabase.table('portfolios').select("*").eq('client_name', selected_client).execute().data
+portfolio_df = pd.DataFrame(portfolio_data)
+st.data_editor(portfolio_df, num_rows="dynamic")
