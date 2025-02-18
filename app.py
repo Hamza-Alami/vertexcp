@@ -1,22 +1,29 @@
 # Full Streamlit Portfolio Manager with Google Sheets Integration for Streamlit Cloud
-# Adjusted to resolve secrets.toml detection issue
+# Adjusted to resolve path issues with secrets.toml
 
 import streamlit as st
 import gspread
 import pandas as pd
 from google.oauth2 import service_account
+import os
+
+# Verify Current Working Directory
+st.write(f"📂 Current working directory: {os.getcwd()}")
 
 # Debugging Secret Detection
 st.write("🔑 Checking for GCP service account credentials...")
 st.write(f"Secrets keys found: {list(st.secrets.keys())}")
 
+# Important Note for Deployment Path Structure:
+# Place `.streamlit/secrets.toml` in the root directory (same level as `app.py` and `requirements.txt`).
+
 # Authenticate using Streamlit Cloud Secrets
 if "gcp_service_account" not in st.secrets:
-    st.error("❌ GCP credentials not found. Ensure '[gcp_service_account]' is correctly defined in Streamlit Cloud secrets.")
+    st.error("❌ GCP credentials not found. Move `.streamlit/secrets.toml` to the same level as `app.py`.")
 else:
     try:
         credentials = service_account.Credentials.from_service_account_info(
-            dict(st.secrets["gcp_service_account"]),
+            st.secrets["gcp_service_account"],
             scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         )
         client = gspread.authorize(credentials)
@@ -82,4 +89,4 @@ else:
     if st.button("Refresh Data"):
         st.experimental_rerun()
 
-st.info("✅ Ensure that `secrets.toml` is uploaded and structured correctly. If issues persist, verify that Streamlit Cloud has `[gcp_service_account]` defined under `Settings > Secrets`.")
+st.warning("Ensure `.streamlit/secrets.toml` is in the root directory (same level as `app.py`) for Streamlit Cloud.")
