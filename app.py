@@ -1,6 +1,3 @@
-# 📊 Streamlit Portfolio Manager with Supabase Integration
-# Full Version with Stock Management and Client Portfolios
-
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -18,111 +15,109 @@ def get_stock_data():
         response = requests.get("https://backend.idbourse.com/api_2/get_all_data", timeout=10)
         response.raise_for_status()
         data = response.json()
-        return pd.DataFrame([(s.get('name', 'N/A'), s.get('dernier_cours', 0)) for s in data], columns=['name', 'dernier_cours'])
+        return pd.DataFrame([(s['name'], s['dernier_cours']) for s in data], columns=["name", "dernier_cours"])
     except Exception as e:
-        st.error(f"Failed to fetch stock data: {e}")
+        st.error(f"Error fetching stock data: {e}")
         return pd.DataFrame(columns=["name", "dernier_cours"])
 
 stocks = get_stock_data()
 
-# ✅ Add Client
-def add_client(client_name):
-    client.table('clients').insert({"name": client_name}).execute()
+# ✅ Create Client
+def create_client(name):
+    client.table('clients').insert({"name": name}).execute()
 
-# ✅ Delete Client
-def delete_client(client_name):
-    client.table('clients').delete().eq('name', client_name).execute()
-
-# ✅ Get Client List
-@st.cache_data
-def get_client_list():
-    query = client.table('clients').select("name").execute()
-    return [c['name'] for c in query.data] if query.data else []
-
-# ✅ Add Stock to Client Portfolio
+# ✅ Add Stock to Portfolio
 def add_stock_to_portfolio(client_name, stock_name, quantity):
-    stock_price = stocks.loc[stocks['name'] == stock_name, 'dernier_cours'].values[0]
-    value = quantity * stock_price
-    client.table('portfolios').insert({
-        "client_name": client_name,
-        "stock_name": stock_name,
-        "quantity": quantity,
-        "value": value,
-        "cash": 0
-    }).execute()
+    client_id = get_client_id(client_name)
+    if not client_id:
+        st.error("Client not found.")
+        return
 
-# ✅ Update Client Cash
-def update_client_cash(client_name, cash):
-    client.table('portfolios').update({"cash": cash}).eq("client_name", client_name).execute()
-
-# ✅ Show Client Portfolio
-def show_client_portfolio(client_name):
-    query = client.table('portfolios').select("*").eq("client_name", client_name).execute()
-    df = pd.DataFrame(query.data)
-    if not df.empty:
-        df['total_value'] = df['quantity'] * df['value'] + df['cash']
-        st.dataframe(df)
-        total = df['total_value'].sum()
-        st.write(f"### 💰 Total Portfolio Value: {total:.2f}")
+    # Check if stock already exists
+    existing_stock = client.table('portfolios').select("*").eq('client_id', client_id).eq('stock_name', stock_name).execute()
+    if existing_stock.data:
+        # Update existing quantity
+        new_quantity = existing_stock.data[0]['quantity'] + quantity
+        client.table('portfolios').update({"quantity": new_quantity}).eq('id', existing_stock.data[0]['id']).execute()
     else:
-        st.write("No stocks found for this client.")
+        # Insert new stock
+        price = stocks.loc[stocks['name'] == stock_name, 'dernier_cours'].values[0]
+        client.table('portfolios').insert({
+            "client_id": client_id,
+            "stock_name": stock_name,
+            "quantity": quantity,
+            "value": price * quantity
+        }).execute()
 
-# ✅ Show Inventory
-def show_inventory():
-    query = client.table('portfolios').select("stock_name, quantity").execute()
+# ✅ Get Client ID
+def get_client_id(client_name):
+    result = client.table('clients').select('id').eq('name', client_name).execute()
+    if result.data:
+        return result.data[0]['id']
+    return None
+
+# ✅ Show Single Portfolio
+def show_portfolio(client_name):
+    client_id = get_client_id(client_name)
+    if not client_id:
+        st.error("Client not found.")
+        return
+
+    query = client.table('portfolios').select("*").eq('client_id', client_id).execute()
     df = pd.DataFrame(query.data)
-    if not df.empty:
-        inventory = df.groupby("stock_name")["quantity"].sum().reset_index()
-        st.dataframe(inventory)
-    else:
-        st.write("No inventory data available.")
 
-# ✅ Streamlit UI with Sidebar Navigation
-page = st.sidebar.selectbox("📂 Select Page", ["Clients", "Cours (Stocks)", "Inventaire"])
+    # Display Client Name
+    st.subheader(f"📜 Portfolio for {client_name}")
+
+    # Add Cash Row
+    cash_row = pd.DataFrame([{"stock_name": "CASH", "quantity": 1, "value": df["value"].sum()}])
+    df = pd.concat([df, cash_row], ignore_index=True)
+
+    # Rename Columns
+    df = df.rename(columns={
+        "stock_name": "valeur",
+        "quantity": "quantité",
+        "value": "valorisation"
+    })
+
+    # Remove Unnecessary Columns
+    df = df[["valeur", "quantité", "valorisation"]]
+
+    # Inline Editing of Portfolio
+    edited_portfolio = st.data_editor(df, key="portfolio_editor", num_rows="dynamic")
+
+    # Total Portfolio Value
+    total_value = edited_portfolio["valorisation"].sum()
+    st.subheader(f"💰 Valorisation totale du portefeuille: {total_value:.2f}")
+
+    return edited_portfolio
+
+# ✅ Show All Clients' Portfolios
+def show_all_portfolios():
+    clients = client.table('clients').select("*").execute().data
+    for c in clients:
+        show_portfolio(c['name'])
+
+# ✅ Streamlit UI with Sidebar
+page = st.sidebar.selectbox("📂 Select Page", ["Clients", "Cours (Stocks)", "Single Portfolio", "All Portfolios"])
 
 if page == "Clients":
     st.title("👤 Manage Clients")
-    
-    # Add Client
-    client_name = st.text_input("Enter Client Name")
+    client_name = st.text_input("Client Name")
     if st.button("➕ Add Client"):
-        add_client(client_name)
+        create_client(client_name)
         st.success(f"Client '{client_name}' added!")
-    
-    # Delete Client
-    clients = get_client_list()
-    if clients:
-        client_to_delete = st.selectbox("Select Client to Delete", clients)
-        if st.button("🗑 Delete Client"):
-            delete_client(client_to_delete)
-            st.success(f"Client '{client_to_delete}' deleted!")
-    else:
-        st.write("No clients found.")
-    
-    # Manage Portfolios
-    client_selected = st.selectbox("Select Client for Portfolio", get_client_list())
-    if client_selected:
-        # Add Stocks
-        with st.form("add_stock_form"):
-            stock_name = st.selectbox("Select Stock", stocks["name"].tolist())
-            quantity = st.number_input("Quantity", min_value=1, step=1)
-            if st.form_submit_button("➕ Add Stock to Portfolio"):
-                add_stock_to_portfolio(client_selected, stock_name, quantity)
-                st.success(f"{quantity} shares of {stock_name} added to {client_selected}'s portfolio.")
-
-        # Manage Cash
-        cash = st.number_input("💰 Update Cash", value=0, step=100)
-        if st.button("💾 Save Cash"):
-            update_client_cash(client_selected, cash)
-            st.success(f"Cash updated to {cash} for {client_selected}.")
-
-        # View Portfolio
-        show_client_portfolio(client_selected)
 
 elif page == "Cours (Stocks)":
-    st.title("📈 Stock Prices from ID Bourse")
+    st.title("📈 Stock Prices")
     st.dataframe(stocks)
 
-elif page == "Inventaire":
-    st.title("📊 Global Portfolio Inventory")
-    show_inventory()
+elif page == "Single Portfolio":
+    st.title("📜 Client Portfolio")
+    client_name = st.text_input("Enter Client Name")
+    if st.button("🔍 Show Portfolio"):
+        show_portfolio(client_name)
+
+elif page == "All Portfolios":
+    st.title("📊 All Clients' Portfolios")
+    show_all_portfolios()
