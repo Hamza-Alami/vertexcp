@@ -1,7 +1,13 @@
+# Full Streamlit Portfolio App with Google Sheets Integration
+# Fixing the 'ModuleNotFoundError' by ensuring proper dependencies
+
 import streamlit as st
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
+from oauth2client.service_account import ServiceAccountCredentials
+
+# Ensure dependencies are installed by running:
+# pip install streamlit gspread oauth2client pandas
 
 # Authenticate with Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -14,8 +20,12 @@ sheet = google_sheet.sheet1
 
 # Load portfolios data from Google Sheets
 def load_portfolios():
-    data = sheet.get_all_records()
-    return pd.DataFrame(data)
+    try:
+        data = sheet.get_all_records()
+        return pd.DataFrame(data) if data else pd.DataFrame(columns=["client_name", "stock_name", "quantity", "strategy"])
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return pd.DataFrame(columns=["client_name", "stock_name", "quantity", "strategy"])
 
 # Save a new portfolio
 def save_portfolio(client_name, stock_name, quantity, strategy):
