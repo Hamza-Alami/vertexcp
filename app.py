@@ -1,50 +1,49 @@
-# Full Streamlit Portfolio App with Google Sheets Integration
-# Fixing the 'ModuleNotFoundError' by ensuring proper dependencies
+# Full Streamlit Portfolio Manager with Google Sheets Integration for Streamlit Cloud
 
 import streamlit as st
 import gspread
 import pandas as pd
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2 import service_account
 
-# Ensure dependencies are installed by running:
-# pip install streamlit gspread oauth2client pandas
-
-# Authenticate with Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials = ServiceAccountCredentials.from_json_keyfile_name('benificia-am-029ac0ca270c.json', scope)
+# Authenticate using Streamlit Cloud Secrets
+credentials = service_account.Credentials.from_service_account_info(
+    st.secrets["gcp_service_account"],
+    scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+)
 client = gspread.authorize(credentials)
 
-# Connect to Google Sheet
+# Connect to Google Sheets
 google_sheet = client.open("Portfolio Manager")
 sheet = google_sheet.sheet1
 
-# Load portfolios data from Google Sheets
+# Load Portfolios Data
 def load_portfolios():
     try:
         data = sheet.get_all_records()
         return pd.DataFrame(data) if data else pd.DataFrame(columns=["client_name", "stock_name", "quantity", "strategy"])
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"Failed to load data: {e}")
         return pd.DataFrame(columns=["client_name", "stock_name", "quantity", "strategy"])
 
-# Save a new portfolio
+# Save Portfolio Entry
 def save_portfolio(client_name, stock_name, quantity, strategy):
     sheet.append_row([client_name, stock_name, quantity, strategy])
 
-# Delete a portfolio by client name
+# Delete Portfolio by Client Name
 def delete_portfolio(client_name):
     records = sheet.get_all_records()
     for i, record in enumerate(records, start=2):
-        if record['client_name'] == client_name:
+        if record.get('client_name') == client_name:
             sheet.delete_rows(i)
             break
 
-# Streamlit Interface
+# Streamlit App UI
 st.title("📊 Portfolio Manager")
+
 portfolios = load_portfolios()
 st.dataframe(portfolios)
 
-# Add a new portfolio
+# Add Portfolio Form
 with st.form("add_portfolio"):
     client_name = st.text_input("Client Name")
     stock_name = st.text_input("Stock Name")
@@ -54,10 +53,10 @@ with st.form("add_portfolio"):
 
     if submitted:
         save_portfolio(client_name, stock_name, quantity, strategy)
-        st.success("Portfolio added!")
+        st.success("Portfolio added successfully!")
         st.experimental_rerun()
 
-# Delete a portfolio
+# Delete Portfolio Form
 with st.form("delete_portfolio"):
     client_to_delete = st.text_input("Client Name to Delete")
     delete_submitted = st.form_submit_button("Delete Portfolio")
@@ -67,5 +66,6 @@ with st.form("delete_portfolio"):
         st.success("Portfolio deleted!")
         st.experimental_rerun()
 
+# Refresh Button
 if st.button("Refresh Data"):
     st.experimental_rerun()
