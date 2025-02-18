@@ -1,27 +1,31 @@
-
 import streamlit as st
 import pandas as pd
 from supabase import create_client
 
-# Verify Secrets Loaded
-st.write(f"Detected Secrets Keys: {list(st.secrets.keys())}")
+# Debug Secrets
+st.write(f"👀 Loaded Secrets Keys: {list(st.secrets.keys())}")
 
-# Connect to Supabase
-supabase_url = st.secrets.get("supabase", {}).get("url")
-supabase_key = st.secrets.get("supabase", {}).get("key")
-
-if not supabase_url or not supabase_key:
-    st.error("❌ Missing Supabase URL or Key. Check Streamlit Cloud Secrets.")
+# Retrieve Secrets Safely
+supabase_secrets = st.secrets.get("supabase")
+if not supabase_secrets:
+    st.error("🚨 Missing `[supabase]` section in secrets. Check Streamlit Cloud > Settings > Secrets.")
     st.stop()
 
+supabase_url = supabase_secrets.get("url")
+supabase_key = supabase_secrets.get("key")
+
+if not supabase_url or not supabase_key:
+    st.error("❌ Missing Supabase URL or Key. Ensure both are in Streamlit Cloud Secrets.")
+    st.stop()
+
+# Connect to Supabase
 client = create_client(supabase_url, supabase_key)
 
-# Create Client and Portfolio
+# Client and Portfolio Functions
 def create_client(name):
     client.table('clients').insert({"name": name}).execute()
     client.table('portfolios').insert({"client_name": name, "stocks": []}).execute()
 
-# Display Portfolios
 def display_portfolios(selected_clients):
     data = client.table('portfolios').select("*").execute().data
     df = pd.DataFrame(data)
@@ -34,10 +38,9 @@ with st.form("add_client"):
     client_name = st.text_input("Client Name")
     if st.form_submit_button("Add Client"):
         create_client(client_name)
-        st.success(f"Client '{client_name}' created!")
+        st.success(f"✅ Client '{client_name}' created!")
         st.experimental_rerun()
 
-# View Portfolios
 all_clients = [c['name'] for c in client.table('clients').select('name').execute().data]
 selected_clients = st.multiselect("Select Clients", all_clients)
 if st.button("Show Portfolios"):
