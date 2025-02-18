@@ -19,27 +19,7 @@ def get_stock_data():
 
 stocks = get_stock_data()
 st.title("📈 Stock Prices")
-st.dataframe(stocks)
-
-# Strategies Management
-st.sidebar.title("🎯 Manage Strategies")
-if 'strategies' not in st.session_state:
-    st.session_state['strategies'] = {}
-
-strategy_name = st.sidebar.text_input("Strategy Name")
-selected_stocks = st.sidebar.multiselect("Select Stocks", stocks['name'].tolist())
-weights = {stock: st.sidebar.slider(f"Weight for {stock} (%)", 0.0, 100.0, 0.0, 0.5) for stock in selected_stocks}
-cash_weight = 100 - sum(weights.values())
-
-if st.sidebar.button("Save Strategy"):
-    weights['CASH'] = cash_weight
-    st.session_state['strategies'][strategy_name] = weights
-    st.success(f"Strategy '{strategy_name}' saved")
-
-for name in list(st.session_state['strategies'].keys()):
-    if st.sidebar.button(f"Delete Strategy {name}"):
-        del st.session_state['strategies'][name]
-        st.success(f"Strategy '{name}' deleted")
+st.dataframe(stocks[['name', 'dernier_cours']])
 
 # Clients Management
 st.sidebar.title("👤 Clients")
@@ -47,27 +27,27 @@ if 'clients' not in st.session_state:
     st.session_state['clients'] = {}
 
 client_name = st.sidebar.text_input("Client Name")
-strategy_for_client = st.sidebar.selectbox("Select Strategy", list(st.session_state['strategies'].keys()) + ["Custom"])
-
 if st.sidebar.button("Add Client"):
-    client_portfolio = pd.DataFrame(columns=["Valeur", "Quantité", "Cours", "Valorisation", "Target Weight", "Target Quantity", "Difference"])
-    if strategy_for_client != "Custom":
-        strategy_weights = st.session_state['strategies'][strategy_for_client]
-        for stock, weight in strategy_weights.items():
-            client_portfolio = pd.concat([client_portfolio, pd.DataFrame({'Valeur': [stock], 'Target Weight': [weight]})], ignore_index=True)
-    st.session_state['clients'][client_name] = {'portfolio': client_portfolio, 'strategy': strategy_for_client}
+    st.session_state['clients'][client_name] = pd.DataFrame(columns=["Valeur", "Quantité", "Cours", "Valorisation", "Target Weight", "Target Quantity", "Difference"])
 
-for client, data in st.session_state['clients'].items():
-    st.subheader(f"Portfolio for {client} (Strategy: {data['strategy']})")
-    portfolio = data['portfolio']
+for client, portfolio in st.session_state['clients'].items():
+    st.subheader(f"Portfolio for {client}")
+    if st.button(f"➕ Add Stock to {client}"):
+        new_stock = st.selectbox(f"Select Stock for {client}", stocks['name'].tolist())
+        new_row = pd.DataFrame({'Valeur': [new_stock], 'Quantité': [0], 'Cours': [stocks.loc[stocks['name'] == new_stock, 'dernier_cours'].values[0]], 'Valorisation': [0], 'Target Weight': [0], 'Target Quantity': [0], 'Difference': [0]})
+        st.session_state['clients'][client] = pd.concat([portfolio, new_row], ignore_index=True)
+
+    # Automatic Calculation of Portfolio Values
     portfolio['Cours'] = portfolio['Valeur'].map(stocks.set_index('name')['dernier_cours'])
-    portfolio['Valorisation'] = portfolio['Quantité'].fillna(0) * portfolio['Cours']
+    portfolio['Valorisation'] = portfolio['Quantité'] * portfolio['Cours']
     valorisation_totale = portfolio['Valorisation'].sum()
     portfolio['Target Quantity'] = (portfolio['Target Weight'] * valorisation_totale / portfolio['Cours']).fillna(0)
-    portfolio['Difference'] = (portfolio['Quantité'].fillna(0) - portfolio['Target Quantity']).apply(lambda x: int(np.floor(x)) if x != 'CASH' else x)
+    portfolio['Difference'] = np.floor(portfolio['Quantité'] - portfolio['Target Quantity'])
+
+    edited_portfolio = st.data_editor(portfolio, num_rows="dynamic")
+    st.session_state['clients'][client] = edited_portfolio
     st.write(f"Total Portfolio Value: {valorisation_totale:.2f}")
-    st.data_editor(portfolio, num_rows="dynamic", height=400)
-    st.session_state['clients'][client]['portfolio'] = portfolio
+    
     if st.button(f"Delete {client}"):
         del st.session_state['clients'][client]
         st.success(f"Client '{client}' deleted")
@@ -76,7 +56,7 @@ for client, data in st.session_state['clients'].items():
 st.title("📊 Inventaire")
 inventaire = pd.DataFrame(columns=["Valeur", "Quantité Totale"])
 for data in st.session_state['clients'].values():
-    grouped = data['portfolio'].groupby('Valeur')['Quantité'].sum().reset_index()
+    grouped = data.groupby('Valeur')['Quantité'].sum().reset_index()
     inventaire = pd.concat([inventaire, grouped])
 inventaire = inventaire.groupby('Valeur')['Quantité'].sum().reset_index()
 st.dataframe(inventaire)
