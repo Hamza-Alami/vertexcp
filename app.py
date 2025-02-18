@@ -8,7 +8,7 @@ supabase_url = st.secrets["supabase"]["url"]
 supabase_key = st.secrets["supabase"]["key"]
 client = create_client(supabase_url, supabase_key)
 
-# ✅ Fetch Stocks from ID Bourse API with Error Handling
+# ✅ Fetch Stocks from ID Bourse API
 @st.cache_data
 def get_stock_data():
     try:
@@ -25,32 +25,38 @@ def get_stock_data():
 
 stocks = get_stock_data()
 
-# ✅ Get Client ID by Name
-def get_client_id(client_name):
+# ✅ Get All Clients for Search Suggestions
+def get_all_clients():
+    result = client.table('clients').select("name").execute()
+    return [c["name"] for c in result.data] if result.data else []
+
+# ✅ Get Client ID (Create if not exists)
+def get_or_create_client_id(client_name):
     result = client.table('clients').select("id").eq("name", client_name).execute()
     if result.data:
         return result.data[0]["id"]
-    return None
+    else:
+        # Create new client if doesn't exist
+        insert_result = client.table('clients').insert({"name": client_name}).execute()
+        if insert_result.data:
+            return insert_result.data[0]["id"]
+        return None
 
-# ✅ Create a New Client
+# ✅ Create a New Client (Allows duplicates)
 def create_client(name):
-    try:
-        client.table('clients').insert({"name": name}).execute()
-    except Exception as e:
-        st.error(f"Error creating client: {e}")
+    client.table('clients').insert({"name": name}).execute()
 
 # ✅ Add or Update Stock in Portfolio
 def add_stock_to_portfolio(client_name, stock_name, quantity):
-    client_id = get_client_id(client_name)
+    client_id = get_or_create_client_id(client_name)
     if not client_id:
-        st.error(f"Client '{client_name}' not found.")
+        st.error(f"Failed to create or retrieve client '{client_name}'")
         return
 
-    # Check if stock exists
     existing_stock = client.table('portfolios').select("*").eq('client_id', client_id).eq('stock_name', stock_name).execute()
     
     if existing_stock.data:
-        # Update quantity if stock already exists
+        # Update quantity if stock exists
         current_quantity = existing_stock.data[0]["quantity"]
         new_quantity = current_quantity + quantity
         if new_quantity <= 0:
@@ -74,7 +80,7 @@ def add_stock_to_portfolio(client_name, stock_name, quantity):
 
 # ✅ Show Portfolio for a Specific Client
 def show_portfolio(client_name):
-    client_id = get_client_id(client_name)
+    client_id = get_or_create_client_id(client_name)
     if not client_id:
         st.error(f"Client '{client_name}' not found.")
         return
@@ -86,12 +92,9 @@ def show_portfolio(client_name):
         st.warning(f"No portfolio data found for '{client_name}'.")
         return
 
-    # Ensure 'value' column exists
-    if 'value' not in df.columns:
-        df['value'] = 0.0
-
     # Add Cash Row
-    cash_value = df['value'].sum() * 0.1  # Example: Cash = 10% of portfolio value
+    total_value = df['value'].sum()
+    cash_value = total_value * 0.1  # Example: 10% of total value is cash
     cash_row = pd.DataFrame([{"stock_name": "CASH", "quantity": 1, "value": cash_value}])
     df = pd.concat([df, cash_row], ignore_index=True)
 
@@ -102,32 +105,34 @@ def show_portfolio(client_name):
         "value": "valorisation"
     }, inplace=True)
 
-    # Display Portfolio with Client Name Above
+    # Display Portfolio
     st.subheader(f"📜 Portfolio for {client_name}")
-    st.dataframe(df, use_container_width=True, height=300)
+    st.dataframe(df, use_container_width=True)
 
     # Show Total Portfolio Value
     total_value = df["valorisation"].sum()
     st.write(f"**💰 Valorisation totale du portefeuille:** {total_value}")
 
-# ✅ Show All Clients' Portfolios One by One
+# ✅ Show All Clients' Portfolios
 def show_all_portfolios():
-    clients = client.table('clients').select("name").execute().data
+    clients = get_all_clients()
     if not clients:
         st.warning("No clients found.")
         return
 
-    for c in clients:
-        client_name = c["name"]
+    for client_name in clients:
         st.write("---")
         show_portfolio(client_name)
 
 # ✅ Streamlit UI with Pages
-page = st.sidebar.selectbox("📂 Choose Page", ["Clients", "Cours (Stocks)", "Client Portfolio", "All Portfolios"])
+page = st.sidebar.selectbox(
+    "📂 Choose Page",
+    ["Clients", "Cours (Stocks)", "Client Portfolio", "All Portfolios"]
+)
 
 if page == "Clients":
     st.title("👤 Manage Clients")
-    client_name = st.text_input("Client Name")
+    client_name = st.text_input("Client Name", placeholder="Type new or existing client name")
     if st.button("➕ Add Client"):
         create_client(client_name)
         st.success(f"Client '{client_name}' added!")
@@ -138,7 +143,12 @@ elif page == "Cours (Stocks)":
 
 elif page == "Client Portfolio":
     st.title("📜 Client Portfolio")
-    client_name = st.text_input("Enter Client Name")
+    existing_clients = get_all_clients()
+    client_name = st.selectbox(
+        "Select or Enter Client Name",
+        options=[""] + existing_clients,
+        placeholder="Type or select client"
+    )
     if st.button("🔍 Show Portfolio"):
         show_portfolio(client_name)
 
