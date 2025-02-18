@@ -1,47 +1,110 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client
-
-# Debug Secrets
-st.write(f"👀 Loaded Secrets Keys: {list(st.secrets.keys())}")
-
-# Retrieve Secrets Safely
-supabase_secrets = st.secrets.get("supabase")
-if not supabase_secrets:
-    st.error("🚨 Missing `[supabase]` section in secrets. Check Streamlit Cloud > Settings > Secrets.")
-    st.stop()
-
-supabase_url = supabase_secrets.get("url")
-supabase_key = supabase_secrets.get("key")
-
-if not supabase_url or not supabase_key:
-    st.error("❌ Missing Supabase URL or Key. Ensure both are in Streamlit Cloud Secrets.")
-    st.stop()
+import requests
 
 # Connect to Supabase
+supabase_url = st.secrets["supabase"]["url"]
+supabase_key = st.secrets["supabase"]["key"]
 client = create_client(supabase_url, supabase_key)
 
-# Client and Portfolio Functions
-def create_client(name):
-    client.table('clients').insert({"name": name}).execute()
-    client.table('portfolios').insert({"client_name": name, "stocks": []}).execute()
+# Fetch Stock Prices from ID Bourse API
+@st.cache_data
+def get_stock_data():
+    url = "https://backend.idbourse.com/api_2/get_all_data"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        stocks = pd.DataFrame(data['stocks'])
+        stocks = stocks[['name', 'dernier_cours']].rename(columns={'dernier_cours': 'price'})
+        # Add CASH with fixed price 1
+        stocks = pd.concat([stocks, pd.DataFrame([{'name': 'CASH', 'price': 1}])], ignore_index=True)
+        return stocks
+    else:
+        st.error("Failed to load stock data")
+        return pd.DataFrame()
 
-def display_portfolios(selected_clients):
-    data = client.table('portfolios').select("*").execute().data
-    df = pd.DataFrame(data)
-    st.dataframe(df[df['client_name'].isin(selected_clients)])
+stocks = get_stock_data()
 
-# Streamlit UI
-st.title("📊 Client Portfolio Manager")
+# Sidebar Navigation
+page = st.sidebar.selectbox("Navigation", ["Cours", "Clients"])
 
-with st.form("add_client"):
-    client_name = st.text_input("Client Name")
-    if st.form_submit_button("Add Client"):
-        create_client(client_name)
-        st.success(f"✅ Client '{client_name}' created!")
-        st.experimental_rerun()
+# ========================= Cours Page =========================
+if page == "Cours":
+    st.title("📈 Cours (Stock Prices)")
+    st.dataframe(stocks)
 
-all_clients = [c['name'] for c in client.table('clients').select('name').execute().data]
-selected_clients = st.multiselect("Select Clients", all_clients)
-if st.button("Show Portfolios"):
-    display_portfolios(selected_clients)
+# ========================= Clients Page =========================
+else:
+    st.title("👥 Client Portfolio Manager")
+
+    # Add New Client
+    with st.form("add_client"):
+        client_name = st.text_input("Client Name")
+        if st.form_submit_button("Add Client"):
+            client.table('clients').insert({"name": client_name}).execute()
+            client.table('portfolios').insert({"client_name": client_name, "cash": 0}).execute()
+            st.success(f"Client '{client_name}' created with empty portfolio!")
+            st.experimental_rerun()
+
+    # List All Clients
+    all_clients = [c['name'] for c in client.table('clients').select('name').execute().data]
+    st.subheader("All Clients")
+    st.write(all_clients)
+
+    # Delete Client
+    with st.form("delete_client"):
+        client_to_delete = st.selectbox("Select Client to Delete", all_clients)
+        if st.form_submit_button("Delete Client"):
+            client.table('clients').delete().eq('name', client_to_delete).execute()
+            client.table('portfolios').delete().eq('client_name', client_to_delete).execute()
+            st.success(f"Client '{client_to_delete}' deleted.")
+            st.experimental_rerun()
+
+    # Manage Client Portfolios
+    selected_client = st.selectbox("Select Client to Manage Portfolio", all_clients)
+    portfolio_data = pd.DataFrame(
+        client.table('portfolios').select("*").eq('client_name', selected_client).execute().data
+    )
+
+    if not portfolio_data.empty:
+        st.subheader(f"Portfolio for {selected_client}")
+
+        # Show and Edit Portfolio
+        edited_portfolio = st.data_editor(
+            portfolio_data[['name', 'quantity', 'value', 'cash']],
+            key="portfolio_editor",
+            num_rows="dynamic"
+        )
+
+        if st.button("Save Portfolio"):
+            for _, row in edited_portfolio.iterrows():
+                client.table('portfolios').update({
+                    "quantity": row['quantity'],
+                    "value": row['quantity'] * stocks.loc[stocks['name'] == row['name'], 'price'].values[0]
+                }).eq('client_name', selected_client).eq('name', row['name']).execute()
+            st.success("Portfolio updated successfully.")
+            st.experimental_rerun()
+
+        # Total Valorisation
+        total_valorisation = edited_portfolio['value'].sum() + edited_portfolio['cash'].sum()
+        st.subheader(f"💰 Total Portfolio Valorisation: {total_valorisation:.2f} MAD")
+
+        # Add Stocks from Cours to Portfolio
+        with st.form("add_stock"):
+            stock_to_add = st.selectbox("Select Stock to Add", stocks['name'].tolist())
+            quantity_to_add = st.number_input("Quantity", min_value=1, value=1)
+            if st.form_submit_button("Add Stock"):
+                stock_price = stocks.loc[stocks['name'] == stock_to_add, 'price'].values[0]
+                client.table('portfolios').insert({
+                    "client_name": selected_client,
+                    "name": stock_to_add,
+                    "quantity": quantity_to_add,
+                    "value": quantity_to_add * stock_price,
+                    "cash": 0
+                }).execute()
+                st.success(f"Added {quantity_to_add} of {stock_to_add} to {selected_client}'s portfolio.")
+                st.experimental_rerun()
+
+    else:
+        st.write(f"No portfolio found for {selected_client}. Try adding stocks or cash.")
