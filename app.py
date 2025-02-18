@@ -9,19 +9,6 @@ from google.oauth2 import service_account
 # Check Streamlit secrets for GCP credentials
 if "gcp_service_account" not in st.secrets:
     st.error("❌ Missing GCP service account details. Please add them under `[gcp_service_account]` in Streamlit Cloud secrets.")
-    st.markdown("**Fix Instructions:**
-    1. Go to your app settings on [Streamlit Cloud](https://share.streamlit.io/).
-    2. Navigate to `Secrets`.
-    3. Add your credentials in the following format:
-    ```toml
-    [gcp_service_account]
-    type = "service_account"
-    project_id = "your-project-id"
-    private_key_id = "your-private-key-id"
-    private_key = "your-private-key"
-    client_email = "your-service-account-email"
-    client_id = "your-client-id"
-    ```")
 else:
     # Authenticate using Streamlit Cloud Secrets
     credentials = service_account.Credentials.from_service_account_info(
