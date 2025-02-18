@@ -83,27 +83,34 @@ else:
     if not portfolio_data.empty:
         st.subheader(f"Portfolio for {selected_client}")
 
-        # Show and Edit Portfolio
+        # 🟡 Fix Missing Columns to Prevent KeyError
+        required_columns = ['name', 'quantity', 'value', 'cash']
+        for col in required_columns:
+            if col not in portfolio_data.columns:
+                portfolio_data[col] = 0  # Add missing columns with default value
+
+        # 🟢 Show and Edit Portfolio
         edited_portfolio = st.data_editor(
-            portfolio_data[['name', 'quantity', 'value', 'cash']],
+            portfolio_data[required_columns],
             key="portfolio_editor",
             num_rows="dynamic"
         )
 
+        # 💾 Save Portfolio Changes
         if st.button("Save Portfolio"):
             for _, row in edited_portfolio.iterrows():
                 client.table('portfolios').update({
                     "quantity": row['quantity'],
-                    "value": row['quantity'] * stocks.loc[stocks['name'] == row['name'], 'price'].values[0]
+                    "value": row['quantity'] * stocks.loc[stocks['name'] == row['name'], 'price'].values[0] if row['name'] in stocks['name'].values else 0
                 }).eq('client_name', selected_client).eq('name', row['name']).execute()
             st.success("Portfolio updated successfully.")
             st.experimental_rerun()
 
-        # Total Valorisation
+        # 💰 Total Valorisation Calculation
         total_valorisation = edited_portfolio['value'].sum() + edited_portfolio['cash'].sum()
         st.subheader(f"💰 Total Portfolio Valorisation: {total_valorisation:.2f} MAD")
 
-        # Add Stocks from Cours to Portfolio
+        # ➕ Add Stocks from Cours to Portfolio
         with st.form("add_stock"):
             stock_to_add = st.selectbox("Select Stock to Add", stocks['name'].tolist())
             quantity_to_add = st.number_input("Quantity", min_value=1, value=1)
