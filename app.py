@@ -1,14 +1,27 @@
 # Full Streamlit Portfolio Manager with Google Sheets Integration for Streamlit Cloud
-# Fixing KeyError for missing Streamlit secrets
+# Including instructions for adding GCP service account details to Streamlit Cloud secrets
 
 import streamlit as st
 import gspread
 import pandas as pd
 from google.oauth2 import service_account
 
-# Ensure Streamlit secrets are properly configured
+# Check Streamlit secrets for GCP credentials
 if "gcp_service_account" not in st.secrets:
-    st.error("Missing GCP service account details in secrets. Add them under [gcp_service_account] in secrets.")
+    st.error("❌ Missing GCP service account details. Please add them under `[gcp_service_account]` in Streamlit Cloud secrets.")
+    st.markdown("**Fix Instructions:**
+    1. Go to your app settings on [Streamlit Cloud](https://share.streamlit.io/).
+    2. Navigate to `Secrets`.
+    3. Add your credentials in the following format:
+    ```toml
+    [gcp_service_account]
+    type = "service_account"
+    project_id = "your-project-id"
+    private_key_id = "your-private-key-id"
+    private_key = "your-private-key"
+    client_email = "your-service-account-email"
+    client_id = "your-client-id"
+    ```")
 else:
     # Authenticate using Streamlit Cloud Secrets
     credentials = service_account.Credentials.from_service_account_info(
@@ -44,33 +57,25 @@ else:
 
     # Streamlit App UI
     st.title("📊 Portfolio Manager")
-
     portfolios = load_portfolios()
     st.dataframe(portfolios)
 
-    # Add Portfolio Form
     with st.form("add_portfolio"):
         client_name = st.text_input("Client Name")
         stock_name = st.text_input("Stock Name")
         quantity = st.number_input("Quantity", min_value=0)
         strategy = st.text_input("Strategy")
-        submitted = st.form_submit_button("Add Portfolio")
-
-        if submitted:
+        if st.form_submit_button("Add Portfolio"):
             save_portfolio(client_name, stock_name, quantity, strategy)
-            st.success("Portfolio added successfully!")
+            st.success("Portfolio added!")
             st.experimental_rerun()
 
-    # Delete Portfolio Form
     with st.form("delete_portfolio"):
         client_to_delete = st.text_input("Client Name to Delete")
-        delete_submitted = st.form_submit_button("Delete Portfolio")
-
-        if delete_submitted:
+        if st.form_submit_button("Delete Portfolio"):
             delete_portfolio(client_to_delete)
             st.success("Portfolio deleted!")
             st.experimental_rerun()
 
-    # Refresh Button
     if st.button("Refresh Data"):
         st.experimental_rerun()
