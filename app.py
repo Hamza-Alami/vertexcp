@@ -25,38 +25,52 @@ def get_stock_data():
 
 stocks = get_stock_data()
 
-# ✅ Get All Clients for Search Suggestions
+# ✅ Get All Clients
 def get_all_clients():
     result = client.table('clients').select("name").execute()
     return [c["name"] for c in result.data] if result.data else []
 
-# ✅ Get Client ID (Create if not exists)
+# ✅ Get or Create Client ID
 def get_or_create_client_id(client_name):
     result = client.table('clients').select("id").eq("name", client_name).execute()
     if result.data:
         return result.data[0]["id"]
     else:
-        # Create new client if doesn't exist
+        # Create client if doesn't exist
         insert_result = client.table('clients').insert({"name": client_name}).execute()
         if insert_result.data:
             return insert_result.data[0]["id"]
         return None
 
-# ✅ Create a New Client (Allows duplicates)
+# ✅ Create Client
 def create_client(name):
     client.table('clients').insert({"name": name}).execute()
 
-# ✅ Add or Update Stock in Portfolio
+# ✅ Create Portfolio (with initial Cash)
+def create_portfolio(client_name, cash_amount):
+    client_id = get_or_create_client_id(client_name)
+    if client_id:
+        # Add Cash row to portfolio
+        client.table('portfolios').insert({
+            "client_id": client_id,
+            "stock_name": "CASH",
+            "quantity": 1,
+            "value": cash_amount
+        }).execute()
+        st.success(f"Portfolio created for '{client_name}' with {cash_amount} cash.")
+
+# ✅ Add Stock to Portfolio
 def add_stock_to_portfolio(client_name, stock_name, quantity):
     client_id = get_or_create_client_id(client_name)
     if not client_id:
         st.error(f"Failed to create or retrieve client '{client_name}'")
         return
 
+    # Check if stock already in portfolio
     existing_stock = client.table('portfolios').select("*").eq('client_id', client_id).eq('stock_name', stock_name).execute()
     
     if existing_stock.data:
-        # Update quantity if stock exists
+        # Update quantity
         current_quantity = existing_stock.data[0]["quantity"]
         new_quantity = current_quantity + quantity
         if new_quantity <= 0:
@@ -85,18 +99,12 @@ def show_portfolio(client_name):
         st.error(f"Client '{client_name}' not found.")
         return
 
-    query = client.table('portfolios').select("stock_name, quantity, value").eq('client_id', client_id).execute()
+    query = client.table('portfolios').select("*").eq('client_id', client_id).execute()
     df = pd.DataFrame(query.data)
 
     if df.empty:
         st.warning(f"No portfolio data found for '{client_name}'.")
         return
-
-    # Add Cash Row
-    total_value = df['value'].sum()
-    cash_value = total_value * 0.1  # Example: 10% of total value is cash
-    cash_row = pd.DataFrame([{"stock_name": "CASH", "quantity": 1, "value": cash_value}])
-    df = pd.concat([df, cash_row], ignore_index=True)
 
     # Rename Columns for Display
     df.rename(columns={
@@ -105,9 +113,18 @@ def show_portfolio(client_name):
         "value": "valorisation"
     }, inplace=True)
 
-    # Display Portfolio
+    # Display Editable Portfolio
     st.subheader(f"📜 Portfolio for {client_name}")
-    st.dataframe(df, use_container_width=True)
+    edited_df = st.data_editor(df, use_container_width=True, num_rows="dynamic")
+
+    # Save Edits
+    if st.button("💾 Save Portfolio Changes"):
+        for index, row in edited_df.iterrows():
+            client.table('portfolios').update({
+                "quantity": row["quantité"],
+                "value": row["valorisation"]
+            }).eq('id', row["id"]).execute()
+        st.success("Portfolio updated!")
 
     # Show Total Portfolio Value
     total_value = df["valorisation"].sum()
@@ -127,7 +144,7 @@ def show_all_portfolios():
 # ✅ Streamlit UI with Pages
 page = st.sidebar.selectbox(
     "📂 Choose Page",
-    ["Clients", "Cours (Stocks)", "Client Portfolio", "All Portfolios"]
+    ["Clients", "Create Portfolio", "Cours (Stocks)", "Client Portfolio", "All Portfolios"]
 )
 
 if page == "Clients":
@@ -136,6 +153,13 @@ if page == "Clients":
     if st.button("➕ Add Client"):
         create_client(client_name)
         st.success(f"Client '{client_name}' added!")
+
+elif page == "Create Portfolio":
+    st.title("🆕 Create Client Portfolio")
+    client_name = st.text_input("Client Name", placeholder="Type client name")
+    cash_amount = st.number_input("Initial Cash Amount", min_value=0.0, format="%.2f")
+    if st.button("💰 Create Portfolio"):
+        create_portfolio(client_name, cash_amount)
 
 elif page == "Cours (Stocks)":
     st.title("📈 Stock Prices")
