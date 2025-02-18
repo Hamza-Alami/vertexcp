@@ -1,58 +1,71 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client
 import requests
+from supabase import create_client
 
-# Connect to Supabase
+# ======================== Connect to Supabase ========================
 supabase_url = st.secrets["supabase"]["url"]
 supabase_key = st.secrets["supabase"]["key"]
 client = create_client(supabase_url, supabase_key)
 
-# Fetch Stock Prices from ID Bourse API
+# ======================== Fetch Stock Prices from ID Bourse ========================
 @st.cache_data
 def get_stock_data():
     url = "https://backend.idbourse.com/api_2/get_all_data"
     response = requests.get(url)
     if response.status_code == 200:
-        data = response.json()
-        stocks = pd.DataFrame(data['stocks'])
-        stocks = stocks[['name', 'dernier_cours']].rename(columns={'dernier_cours': 'price'})
-        # Add CASH with fixed price 1
-        stocks = pd.concat([stocks, pd.DataFrame([{'name': 'CASH', 'price': 1}])], ignore_index=True)
-        return stocks
+        data = response.json()  # Likely returns a list
+        if isinstance(data, list) and len(data) > 0:
+            first_item = data[0]
+            if 'stocks' in first_item:
+                stocks = pd.DataFrame(first_item['stocks'])
+                stocks = stocks[['name', 'dernier_cours']].rename(columns={'dernier_cours': 'price'})
+                # Add CASH with fixed price 1
+                stocks = pd.concat([stocks, pd.DataFrame([{'name': 'CASH', 'price': 1}])], ignore_index=True)
+                return stocks
+            else:
+                st.error("API response does not contain 'stocks'. Check the API structure.")
+        else:
+            st.error("API response is empty or not in expected format.")
     else:
-        st.error("Failed to load stock data")
-        return pd.DataFrame()
+        st.error(f"Failed to load stock data. Status code: {response.status_code}")
+    return pd.DataFrame()
 
 stocks = get_stock_data()
 
-# Sidebar Navigation
-page = st.sidebar.selectbox("Navigation", ["Cours", "Clients"])
+# ======================== Sidebar Navigation ========================
+page = st.sidebar.radio("Navigation", ["Cours", "Clients"])
 
-# ========================= Cours Page =========================
+# ======================== Cours Page (Stock Prices) ========================
 if page == "Cours":
     st.title("📈 Cours (Stock Prices)")
     st.dataframe(stocks)
 
-# ========================= Clients Page =========================
+# ======================== Clients Page (Client Portfolio Manager) ========================
 else:
     st.title("👥 Client Portfolio Manager")
 
-    # Add New Client
+    # 1️⃣ Add New Client
     with st.form("add_client"):
         client_name = st.text_input("Client Name")
         if st.form_submit_button("Add Client"):
             client.table('clients').insert({"name": client_name}).execute()
-            client.table('portfolios').insert({"client_name": client_name, "cash": 0}).execute()
-            st.success(f"Client '{client_name}' created with empty portfolio!")
+            client.table('portfolios').insert({
+                "client_name": client_name,
+                "name": "CASH",
+                "quantity": 0,
+                "value": 0,
+                "cash": 0
+            }).execute()
+            st.success(f"Client '{client_name}' created with initial CASH = 0!")
             st.experimental_rerun()
 
-    # List All Clients
+    # 2️⃣ List All Clients
     all_clients = [c['name'] for c in client.table('clients').select('name').execute().data]
     st.subheader("All Clients")
     st.write(all_clients)
 
-    # Delete Client
+    # 3️⃣ Delete Client
     with st.form("delete_client"):
         client_to_delete = st.selectbox("Select Client to Delete", all_clients)
         if st.form_submit_button("Delete Client"):
@@ -61,7 +74,7 @@ else:
             st.success(f"Client '{client_to_delete}' deleted.")
             st.experimental_rerun()
 
-    # Manage Client Portfolios
+    # 4️⃣ Manage Portfolios
     selected_client = st.selectbox("Select Client to Manage Portfolio", all_clients)
     portfolio_data = pd.DataFrame(
         client.table('portfolios').select("*").eq('client_name', selected_client).execute().data
