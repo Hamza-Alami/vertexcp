@@ -1,27 +1,30 @@
 # Full Streamlit Portfolio Manager with Google Sheets Integration for Streamlit Cloud
-# Updated to adjust for changes in secrets.toml
+# Adjusted to resolve secrets.toml detection issue
 
 import streamlit as st
 import gspread
 import pandas as pd
 from google.oauth2 import service_account
 
+# Debugging Secret Detection
+st.write("🔑 Checking for GCP service account credentials...")
+st.write(f"Secrets keys found: {list(st.secrets.keys())}")
+
 # Authenticate using Streamlit Cloud Secrets
 if "gcp_service_account" not in st.secrets:
-    st.error("❌ Missing GCP service account details. Add them under `[gcp_service_account]` in Streamlit Cloud secrets.")
+    st.error("❌ GCP credentials not found. Ensure '[gcp_service_account]' is correctly defined in Streamlit Cloud secrets.")
 else:
-    credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    client = gspread.authorize(credentials)
-
-    # Connect to Google Sheets
     try:
+        credentials = service_account.Credentials.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]),
+            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        )
+        client = gspread.authorize(credentials)
         google_sheet = client.open("Portfolio Manager")
         sheet = google_sheet.sheet1
     except Exception as e:
-        st.error(f"Error connecting to Google Sheets: {e}")
+        st.error(f"⚠️ Google Sheets connection error: {e}")
+        st.stop()
 
     # Load Portfolios Data
     def load_portfolios():
@@ -54,7 +57,6 @@ else:
     # Streamlit App UI
     st.title("📊 Portfolio Manager")
 
-    # Display Current Portfolios
     portfolios = load_portfolios()
     st.dataframe(portfolios)
 
@@ -80,4 +82,4 @@ else:
     if st.button("Refresh Data"):
         st.experimental_rerun()
 
-st.info("Ensure your secrets.toml matches the updated format and is uploaded to Streamlit Cloud.")
+st.info("✅ Ensure that `secrets.toml` is uploaded and structured correctly. If issues persist, verify that Streamlit Cloud has `[gcp_service_account]` defined under `Settings > Secrets`.")
