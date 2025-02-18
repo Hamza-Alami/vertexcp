@@ -83,33 +83,7 @@ def get_portfolio(client_name):
     result = client.table('portfolios').select("*").eq("client_id", client_id).execute()
     return pd.DataFrame(result.data)
 
-# ✅ Add New Stock to Portfolio
-def add_stock_to_portfolio(client_name, stock_name, quantity):
-    client_id = get_client_id(client_name)
-    if client_id:
-        existing = client.table('portfolios').select("*").eq("client_id", client_id).eq("valeur", stock_name).execute()
-        if existing.data:
-            st.warning(f"{stock_name} already exists in portfolio. Adjust quantity instead.")
-        else:
-            stock_price = stocks.loc[stocks["valeur"] == stock_name, "cours"].values[0]
-            valorisation = quantity * stock_price
-            client.table('portfolios').insert({
-                "client_id": client_id,
-                "valeur": stock_name,
-                "quantité": quantity,
-                "cours": stock_price,
-                "valorisation": valorisation
-            }).execute()
-            st.success(f"Added {quantity} of {stock_name} to {client_name}'s portfolio")
-
-# ✅ Delete Stock from Portfolio
-def delete_stock_from_portfolio(client_name, stock_name):
-    client_id = get_client_id(client_name)
-    if client_id:
-        client.table('portfolios').delete().eq("client_id", client_id).eq("valeur", stock_name).execute()
-        st.success(f"Removed {stock_name} from {client_name}'s portfolio")
-
-# ✅ Show Portfolio (With Inline Editing and Stock Management)
+# ✅ Show Portfolio (With Inline Editing)
 def show_portfolio(client_name):
     df = get_portfolio(client_name)
     if df.empty:
@@ -146,9 +120,6 @@ def show_portfolio(client_name):
     # Save Changes Button
     if st.button("💾 Save Portfolio Changes"):
         for index, row in edited_df.iterrows():
-            if row["valeur"] == "Cash" and row["quantité"] < 0:
-                st.error("Cash cannot be negative!")
-                return
             updated_valorisation = row["quantité"] * (stocks.loc[stocks["valeur"] == row["valeur"], "cours"].values[0] if row["valeur"] != "Cash" else 1)
             client.table('portfolios').update({
                 "quantité": row["quantité"],
@@ -159,6 +130,49 @@ def show_portfolio(client_name):
     # Show Total Portfolio Value
     total_portfolio_value = df["valorisation"].sum()
     st.write(f"**💰 Valorisation totale du portefeuille:** {total_portfolio_value:.2f}")
+
+# ✅ Show All Clients' Portfolios
+def show_all_portfolios():
+    clients = get_all_clients()
+    if not clients:
+        st.warning("No clients found.")
+        return
+
+    for client_name in clients:
+        st.write("---")
+        show_portfolio(client_name)
+
+# ✅ Portfolio Creation UI (Fixing Missing Reference)
+def new_portfolio_creation_ui():
+    st.subheader("➕ Add Holdings")
+
+    # Hold current holdings in session state
+    if "portfolio_holdings" not in st.session_state:
+        st.session_state.portfolio_holdings = {}
+
+    selected_stock = st.selectbox(
+        "Search and Add Stock or Cash",
+        options=stocks["valeur"].tolist(),
+        placeholder="Search for stock..."
+    )
+    quantity = st.number_input("Quantity", min_value=1, value=1)
+
+    if st.button("➕ Add to Holdings"):
+        if selected_stock in st.session_state.portfolio_holdings:
+            st.warning(f"{selected_stock} already added. Adjust the quantity directly.")
+        else:
+            st.session_state.portfolio_holdings[selected_stock] = quantity
+            st.success(f"Added {quantity} units of {selected_stock} to holdings")
+
+    # Show Current Holdings
+    if st.session_state.portfolio_holdings:
+        st.write("### Current Holdings:")
+        holdings_df = pd.DataFrame([
+            {"valeur": k, "quantité": v} for k, v in st.session_state.portfolio_holdings.items()
+        ])
+        st.dataframe(holdings_df, use_container_width=True)
+
+    return st.session_state.portfolio_holdings
 
 # ✅ Streamlit Sidebar Navigation
 page = st.sidebar.selectbox("📂 Navigation", [
