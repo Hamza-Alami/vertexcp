@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import requests
 from supabase import create_client
-import json
 
 # ✅ Connect to Supabase
 supabase_url = st.secrets["supabase"]["url"]
@@ -17,13 +16,17 @@ def get_stock_data():
     if response.status_code == 200:
         data = response.json()
         stocks = pd.DataFrame(data)[['name', 'dernier_cours']]
+        
+        # Add CASH as a stock for reference
         stocks.loc[len(stocks)] = ['CASH', 1.0]
-        # Save stocks to Supabase
+        
+        # Save stocks to Supabase (upsert)
         for _, row in stocks.iterrows():
             client.table("stocks").upsert({
                 "name": row["name"],
                 "dernier_cours": row["dernier_cours"]
             }).execute()
+
         return stocks
     else:
         st.error("Failed to fetch stock data.")
