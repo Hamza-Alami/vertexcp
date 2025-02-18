@@ -110,7 +110,6 @@ def show_portfolio(client_name, key_prefix=""):
 
     st.subheader(f"📜 Portfolio for {client_name}")
 
-    # Unique keys for selectbox and buttons in `show_all_portfolios()`
     unique_key = f"{key_prefix}_{client_name}"
 
     # Add Stock Section
@@ -144,7 +143,6 @@ def show_portfolio(client_name, key_prefix=""):
             }).eq("client_id", get_client_id(client_name)).eq("valeur", row["valeur"]).execute()
         st.success(f"Portfolio updated successfully for {client_name}!")
 
-    # Show Total Portfolio Value
     total_portfolio_value = df["valorisation"].sum()
     st.write(f"**💰 Valorisation totale du portefeuille ({client_name}):** {total_portfolio_value:.2f}")
 
@@ -155,9 +153,38 @@ def show_all_portfolios():
         st.warning("No clients found.")
         return
 
-    for client_name in clients:
+    for i, client_name in enumerate(clients):
         st.write("---")
-        show_portfolio(client_name, key_prefix="all")
+        show_portfolio(client_name, key_prefix=f"all_{i}")
+
+# ✅ Restore New Portfolio Creation UI
+def new_portfolio_creation_ui():
+    st.subheader("➕ Add Holdings")
+
+    if "portfolio_holdings" not in st.session_state:
+        st.session_state.portfolio_holdings = {}
+
+    selected_stock = st.selectbox(
+        "Search and Add Stock or Cash",
+        options=stocks["valeur"].tolist(),
+        placeholder="Search for stock..."
+    )
+    quantity = st.number_input("Quantity", min_value=1, value=1)
+
+    if st.button("➕ Add to Holdings"):
+        if selected_stock in st.session_state.portfolio_holdings:
+            st.warning(f"{selected_stock} already added. Adjust the quantity directly.")
+        else:
+            st.session_state.portfolio_holdings[selected_stock] = quantity
+            st.success(f"Added {quantity} units of {selected_stock} to holdings")
+
+    if st.session_state.portfolio_holdings:
+        st.write("### Current Holdings:")
+        st.dataframe(pd.DataFrame([
+            {"valeur": k, "quantité": v} for k, v in st.session_state.portfolio_holdings.items()
+        ]), use_container_width=True)
+
+    return st.session_state.portfolio_holdings
 
 # ✅ Streamlit Sidebar Navigation
 page = st.sidebar.selectbox("📂 Navigation", [
@@ -167,48 +194,9 @@ page = st.sidebar.selectbox("📂 Navigation", [
     "View All Portfolios"
 ])
 
-# ----------------------------- Main Pages -------------------------------- #
-
-if page == "Manage Clients":
-    st.title("👤 Manage Clients")
-    existing_clients = get_all_clients()
-
-    # Add New Client
-    with st.form("add_client_form"):
-        new_client = st.text_input("New Client Name")
-        submitted = st.form_submit_button("➕ Add Client")
-        if submitted:
-            create_client(new_client)
-
-    # Rename Client
-    with st.form("rename_client_form"):
-        old_name = st.selectbox("Select Client to Rename", options=existing_clients, placeholder="Select...")
-        new_name = st.text_input("New Client Name")
-        rename_submitted = st.form_submit_button("✏️ Rename Client")
-        if rename_submitted:
-            rename_client(old_name, new_name)
-
-    # Delete Client
-    with st.form("delete_client_form"):
-        delete_name = st.selectbox("Select Client to Delete", options=existing_clients, placeholder="Select...")
-        delete_submitted = st.form_submit_button("🗑️ Delete Client")
-        if delete_submitted:
-            delete_client(delete_name)
-
-elif page == "Create Portfolio":
+if page == "Create Portfolio":
     st.title("📊 Create Client Portfolio")
-    client_name = st.selectbox("Select or Enter Client Name", options=get_all_clients())
-    initial_holdings = {}
-
-    if st.button("💾 Create Portfolio"):
-        create_portfolio(client_name, initial_holdings)
-
-elif page == "View Client Portfolio":
-    st.title("📜 View Client Portfolio")
     client_name = st.selectbox("Select Client", options=get_all_clients())
-    if client_name:
-        show_portfolio(client_name)
-
-elif page == "View All Portfolios":
-    st.title("📊 All Clients' Portfolios")
-    show_all_portfolios()
+    holdings = new_portfolio_creation_ui()
+    if st.button("💾 Create Portfolio"):
+        create_portfolio(client_name, holdings)
