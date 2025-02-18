@@ -14,19 +14,26 @@ def get_stock_data():
     url = "https://backend.idbourse.com/api_2/get_all_data"
     response = requests.get(url)
     if response.status_code == 200:
-        data = response.json()  # Likely returns a list
+        data = response.json()
         if isinstance(data, list) and len(data) > 0:
             first_item = data[0]
             if 'stocks' in first_item:
                 stocks = pd.DataFrame(first_item['stocks'])
-                stocks = stocks[['name', 'dernier_cours']].rename(columns={'dernier_cours': 'price'})
+                if 'name' not in stocks.columns or 'dernier_cours' not in stocks.columns:
+                    st.error("API response is missing required columns.")
+                    return pd.DataFrame()
+
+                # Standardize column names
+                stocks = stocks.rename(columns={'name': 'name', 'dernier_cours': 'price'})
+                stocks = stocks[['name', 'price']]
+                
                 # Add CASH with fixed price 1
                 stocks = pd.concat([stocks, pd.DataFrame([{'name': 'CASH', 'price': 1}])], ignore_index=True)
                 return stocks
             else:
-                st.error("API response does not contain 'stocks'. Check the API structure.")
+                st.error("API response does not contain 'stocks' key.")
         else:
-            st.error("API response is empty or not in expected format.")
+            st.error("API response is empty or has unexpected format.")
     else:
         st.error(f"Failed to load stock data. Status code: {response.status_code}")
     return pd.DataFrame()
@@ -39,7 +46,10 @@ page = st.sidebar.radio("Navigation", ["Cours", "Clients"])
 # ======================== Cours Page (Stock Prices) ========================
 if page == "Cours":
     st.title("📈 Cours (Stock Prices)")
-    st.dataframe(stocks)
+    if stocks.empty:
+        st.error("No stock data available.")
+    else:
+        st.dataframe(stocks)
 
 # ======================== Clients Page (Client Portfolio Manager) ========================
 else:
@@ -99,9 +109,13 @@ else:
         # 💾 Save Portfolio Changes
         if st.button("Save Portfolio"):
             for _, row in edited_portfolio.iterrows():
+                stock_price = (
+                    stocks.loc[stocks['name'] == row['name'], 'price'].values[0]
+                    if row['name'] in stocks['name'].values else 0
+                )
                 client.table('portfolios').update({
                     "quantity": row['quantity'],
-                    "value": row['quantity'] * stocks.loc[stocks['name'] == row['name'], 'price'].values[0] if row['name'] in stocks['name'].values else 0
+                    "value": row['quantity'] * stock_price
                 }).eq('client_name', selected_client).eq('name', row['name']).execute()
             st.success("Portfolio updated successfully.")
             st.experimental_rerun()
@@ -111,20 +125,23 @@ else:
         st.subheader(f"💰 Total Portfolio Valorisation: {total_valorisation:.2f} MAD")
 
         # ➕ Add Stocks from Cours to Portfolio
-        with st.form("add_stock"):
-            stock_to_add = st.selectbox("Select Stock to Add", stocks['name'].tolist())
-            quantity_to_add = st.number_input("Quantity", min_value=1, value=1)
-            if st.form_submit_button("Add Stock"):
-                stock_price = stocks.loc[stocks['name'] == stock_to_add, 'price'].values[0]
-                client.table('portfolios').insert({
-                    "client_name": selected_client,
-                    "name": stock_to_add,
-                    "quantity": quantity_to_add,
-                    "value": quantity_to_add * stock_price,
-                    "cash": 0
-                }).execute()
-                st.success(f"Added {quantity_to_add} of {stock_to_add} to {selected_client}'s portfolio.")
-                st.experimental_rerun()
+        if 'name' not in stocks.columns:
+            st.error("Stocks data is missing 'name' column. Please check the API response.")
+        else:
+            with st.form("add_stock"):
+                stock_to_add = st.selectbox("Select Stock to Add", stocks['name'].tolist())
+                quantity_to_add = st.number_input("Quantity", min_value=1, value=1)
+                if st.form_submit_button("Add Stock"):
+                    stock_price = stocks.loc[stocks['name'] == stock_to_add, 'price'].values[0]
+                    client.table('portfolios').insert({
+                        "client_name": selected_client,
+                        "name": stock_to_add,
+                        "quantity": quantity_to_add,
+                        "value": quantity_to_add * stock_price,
+                        "cash": 0
+                    }).execute()
+                    st.success(f"Added {quantity_to_add} of {stock_to_add} to {selected_client}'s portfolio.")
+                    st.experimental_rerun()
 
     else:
         st.write(f"No portfolio found for {selected_client}. Try adding stocks or cash.")
