@@ -3,15 +3,20 @@ import requests
 import pandas as pd
 import json
 
-# Load stock prices from API
+# Load stock prices from API with proper response parsing
 @st.cache_data
 def get_stock_data():
     url = "https://backend.idbourse.com/api_2/get_all_data"
     response = requests.get(url)
     if response.status_code == 200:
         data = response.json()
-        stocks = pd.DataFrame(data['stocks'])
-        # Add CASH with fixed price 1
+        if isinstance(data, list):
+            stocks = pd.DataFrame(data)
+        elif isinstance(data, dict) and 'stocks' in data:
+            stocks = pd.DataFrame(data['stocks'])
+        else:
+            st.error("Invalid API response format")
+            return pd.DataFrame()
         stocks = pd.concat([stocks, pd.DataFrame([{'name': 'CASH', 'dernier_cours': 1}])], ignore_index=True)
         return stocks
     else:
@@ -19,8 +24,6 @@ def get_stock_data():
         return pd.DataFrame()
 
 stocks = get_stock_data()
-
-# Display stock data
 st.title("📈 Stock Prices")
 st.dataframe(stocks)
 
@@ -39,7 +42,6 @@ if st.sidebar.button("Create Strategy"):
     else:
         st.error("Please enter a strategy name")
 
-# Display existing strategies
 for name, strategy in st.session_state['strategies'].items():
     st.sidebar.subheader(name)
     st.sidebar.write(strategy)
@@ -57,7 +59,6 @@ if st.sidebar.button("Add Client"):
     else:
         st.error("Please enter a client name")
 
-# Display portfolios for each client
 st.title("📂 Client Portfolios")
 for client, portfolio in st.session_state['clients'].items():
     st.subheader(f"Portfolio: {client}")
