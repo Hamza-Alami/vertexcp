@@ -3,145 +3,57 @@ import pandas as pd
 import requests
 from supabase import create_client
 
-# ======================== Connect to Supabase ========================
+# Connect to Supabase
 supabase_url = st.secrets["supabase"]["url"]
 supabase_key = st.secrets["supabase"]["key"]
 client = create_client(supabase_url, supabase_key)
 
-# ======================== Fetch Stock Prices from ID Bourse ========================
+# Fetch Stock Data from ID Bourse API
 @st.cache_data
 def get_stock_data():
-    url = "https://backend.idbourse.com/api_2/get_all_data"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        if isinstance(data, list) and len(data) > 0:
-            first_item = data[0]
-            if 'stocks' in first_item:
-                stocks = pd.DataFrame(first_item['stocks'])
-                if 'name' not in stocks.columns or 'dernier_cours' not in stocks.columns:
-                    st.error("API response is missing required columns.")
-                    return pd.DataFrame()
-
-                # Standardize column names
-                stocks = stocks.rename(columns={'name': 'name', 'dernier_cours': 'price'})
-                stocks = stocks[['name', 'price']]
-                
-                # Add CASH with fixed price 1
-                stocks = pd.concat([stocks, pd.DataFrame([{'name': 'CASH', 'price': 1}])], ignore_index=True)
-                return stocks
-            else:
-                st.error("API response does not contain 'stocks' key.")
-        else:
-            st.error("API response is empty or has unexpected format.")
-    else:
-        st.error(f"Failed to load stock data. Status code: {response.status_code}")
-    return pd.DataFrame()
+    response = requests.get("https://backend.idbourse.com/api_2/get_all_data")
+    data = response.json()
+    df = pd.DataFrame(data)
+    return df[['name', 'dernier_cours']]
 
 stocks = get_stock_data()
 
-# ======================== Sidebar Navigation ========================
-page = st.sidebar.radio("Navigation", ["Cours", "Clients"])
+# Display Stocks
+st.sidebar.header("📈 Stock Prices")
+st.sidebar.dataframe(stocks)
 
-# ======================== Cours Page (Stock Prices) ========================
-if page == "Cours":
-    st.title("📈 Cours (Stock Prices)")
-    if stocks.empty:
-        st.error("No stock data available.")
-    else:
-        st.dataframe(stocks)
+# Manage Clients and Portfolios
+st.title("👤 Client Portfolio Manager")
 
-# ======================== Clients Page (Client Portfolio Manager) ========================
-else:
-    st.title("👥 Client Portfolio Manager")
+with st.form("add_client"):
+    client_name = st.text_input("New Client Name")
+    if st.form_submit_button("Add Client"):
+        client.table('clients').insert({"name": client_name}).execute()
+        st.success(f"Client '{client_name}' added!")
+        st.experimental_rerun()
 
-    # 1️⃣ Add New Client
-    with st.form("add_client"):
-        client_name = st.text_input("Client Name")
-        if st.form_submit_button("Add Client"):
-            client.table('clients').insert({"name": client_name}).execute()
-            client.table('portfolios').insert({
-                "client_name": client_name,
-                "name": "CASH",
-                "quantity": 0,
-                "value": 0,
-                "cash": 0
-            }).execute()
-            st.success(f"Client '{client_name}' created with initial CASH = 0!")
-            st.experimental_rerun()
+# Show All Clients
+all_clients = [c['name'] for c in client.table('clients').select('name').execute().data]
+selected_client = st.selectbox("Select Client", all_clients)
 
-    # 2️⃣ List All Clients
-    all_clients = [c['name'] for c in client.table('clients').select('name').execute().data]
-    st.subheader("All Clients")
-    st.write(all_clients)
+# Add Stock to Portfolio
+with st.form("add_stock"):
+    stock_name = st.selectbox("Select Stock", stocks['name'].tolist())
+    quantity = st.number_input("Quantity", min_value=1, step=1)
+    if st.form_submit_button("Add to Portfolio"):
+        price = stocks.loc[stocks['name'] == stock_name, 'dernier_cours'].values[0]
+        value = quantity * price
+        client.table('portfolios').insert({
+            "client_id": selected_client,
+            "name": stock_name,
+            "quantity": quantity,
+            "value": value
+        }).execute()
+        st.success(f"Added {quantity} shares of {stock_name}")
+        st.experimental_rerun()
 
-    # 3️⃣ Delete Client
-    with st.form("delete_client"):
-        client_to_delete = st.selectbox("Select Client to Delete", all_clients)
-        if st.form_submit_button("Delete Client"):
-            client.table('clients').delete().eq('name', client_to_delete).execute()
-            client.table('portfolios').delete().eq('client_name', client_to_delete).execute()
-            st.success(f"Client '{client_to_delete}' deleted.")
-            st.experimental_rerun()
-
-    # 4️⃣ Manage Portfolios
-    selected_client = st.selectbox("Select Client to Manage Portfolio", all_clients)
-    portfolio_data = pd.DataFrame(
-        client.table('portfolios').select("*").eq('client_name', selected_client).execute().data
-    )
-
-    if not portfolio_data.empty:
-        st.subheader(f"Portfolio for {selected_client}")
-
-        # 🟡 Fix Missing Columns to Prevent KeyError
-        required_columns = ['name', 'quantity', 'value', 'cash']
-        for col in required_columns:
-            if col not in portfolio_data.columns:
-                portfolio_data[col] = 0  # Add missing columns with default value
-
-        # 🟢 Show and Edit Portfolio
-        edited_portfolio = st.data_editor(
-            portfolio_data[required_columns],
-            key="portfolio_editor",
-            num_rows="dynamic"
-        )
-
-        # 💾 Save Portfolio Changes
-        if st.button("Save Portfolio"):
-            for _, row in edited_portfolio.iterrows():
-                stock_price = (
-                    stocks.loc[stocks['name'] == row['name'], 'price'].values[0]
-                    if row['name'] in stocks['name'].values else 0
-                )
-                client.table('portfolios').update({
-                    "quantity": row['quantity'],
-                    "value": row['quantity'] * stock_price
-                }).eq('client_name', selected_client).eq('name', row['name']).execute()
-            st.success("Portfolio updated successfully.")
-            st.experimental_rerun()
-
-        # 💰 Total Valorisation Calculation
-        total_valorisation = edited_portfolio['value'].sum() + edited_portfolio['cash'].sum()
-        st.subheader(f"💰 Total Portfolio Valorisation: {total_valorisation:.2f} MAD")
-
-        # ➕ Add Stocks from Cours to Portfolio
-        if 'name' not in stocks.columns:
-            st.error("Stocks data is missing 'name' column. Please check the API response.")
-        else:
-            with st.form("add_stock"):
-                stock_to_add = st.selectbox("Select Stock to Add", stocks['name'].tolist())
-                quantity_to_add = st.number_input("Quantity", min_value=1, value=1)
-                if st.form_submit_button("Add Stock"):
-                    stock_price = stocks.loc[stocks['name'] == stock_to_add, 'price'].values[0]
-                    client.table('portfolios').insert({
-                        "client_name": selected_client,
-                        "name": stock_to_add,
-                        "quantity": quantity_to_add,
-                        "value": quantity_to_add * stock_price,
-                        "cash": 0
-                    }).execute()
-                    st.success(f"Added {quantity_to_add} of {stock_to_add} to {selected_client}'s portfolio.")
-                    st.experimental_rerun()
-
-    else:
-        st.write(f"No portfolio found for {selected_client}. Try adding stocks or cash.")
+# View Client Portfolio
+if selected_client:
+    portfolio = pd.DataFrame(client.table('portfolios').select('*').eq('client_id', selected_client).execute().data)
+    st.write(f"### Portfolio of {selected_client}")
+    st.dataframe(portfolio[['name', 'quantity', 'value']])
