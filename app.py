@@ -151,10 +151,10 @@ def show_portfolio(client_name, read_only=False):
         return
 
     total_value = df["valorisation"].sum()
-    # Store 'poids' as a float for sorting
+    # Store 'poids' as numeric float for sorting
     df["poids"] = ((df["valorisation"] / total_value) * 100).round(2)
 
-    st.subheader(f" Portfolio for {client_name}")
+    st.subheader(f"📜 Portfolio for {client_name}")
     st.write(f"**Valorisation totale du portefeuille:** {total_value:.2f}")
 
     if read_only:
@@ -188,7 +188,7 @@ def show_portfolio(client_name, read_only=False):
         # Add Stock/Cash
         add_stock = st.selectbox(f"Select Stock/Cash to Add ({client_name})", stocks["valeur"].tolist(), key=f"add_s_{client_name}")
         add_qty = st.number_input(f"Quantity for {client_name}", min_value=1, value=1, key=f"qty_s_{client_name}")
-        if st.button(f"➕ Add {add_stock} to {client_name}", key=f"btn_add_{client_name}"):
+        if st.button(f"➕ Add {add_stock} to {client_name}", key=f"add_btn_{client_name}"):
             price = stocks.loc[stocks["valeur"] == add_stock, "cours"].values[0]
             val = add_qty * price
             client.table("portfolios").insert({
@@ -222,51 +222,84 @@ def show_all_portfolios():
 # ===================== Inventory Page =====================
 def show_inventory():
     """
-    Displays:
-    1) A table of all stocks & cash across all portfolios,
-       with a total quantity column and a 'portefeuille' column listing which clients hold it.
-    2) The total assets under management = sum of all clients' portfolio values.
+    Displays a table with:
+    - valeur
+    - quantité total
+    - valorisation ( = summed quantity * stock price )
+    - poids ( valorisation / sum_of_all_valorisation * 100 )
+    - portefeuille ( list of clients who hold that stock )
+    Then shows total assets under management.
     """
     clients = get_all_clients()
     if not clients:
         st.warning("No clients found. Please create a client first.")
         return
 
-    # Summation data structure: {valeur: {"quantity": 0, "clients": set()}}
-    from collections import defaultdict
-    master = defaultdict(lambda: {"quantity": 0, "clients": set()})
+    master_data = defaultdict(lambda: {"quantity": 0, "clients": set()})
+    total_assets = 0.0
 
-    total_assets = 0
-
+    # 1) Accumulate data from all portfolios
     for c in clients:
         df = get_portfolio(c)
         if not df.empty:
-            # Sum up the total for this client
+            # Add this client's total to AUM
             total_val = df["valorisation"].sum()
             total_assets += total_val
-            # Merge stock quantities
+
+            # Merge stock/cash quantities
             for _, row in df.iterrows():
                 val = row["valeur"]
-                q = row["quantité"]
-                master[val]["quantity"] += q
-                master[val]["clients"].add(c)
+                qty = row["quantité"]
+                master_data[val]["quantity"] += qty
+                master_data[val]["clients"].add(c)
 
-    # Build table
-    data_rows = []
-    for val, info in master.items():
-        data_rows.append({
+    if not master_data:
+        st.title("🗃️ Global Inventory")
+        st.write("No stocks or cash found in any portfolio.")
+        return
+
+    # 2) Build table
+    inventory_rows = []
+    # We'll want to compute total valorisation for each stock
+    # using the latest price from 'stocks'
+    overall_val_sum = 0.0
+
+    for val, info in master_data.items():
+        # find price from 'stocks'
+        price_row = stocks.loc[stocks["valeur"] == val]
+        if price_row.empty:
+            # fallback or skip if not found
+            continue
+        price = price_row["cours"].values[0]
+        # compute aggregated valorisation
+        val_agg = info["quantity"] * price
+        overall_val_sum += val_agg
+
+        inventory_rows.append({
             "valeur": val,
             "quantité total": info["quantity"],
+            "valorisation": val_agg,
             "portefeuille": ", ".join(sorted(info["clients"]))
         })
 
-    st.title("🗃️ Global Inventory")
-    if data_rows:
-        inv_df = pd.DataFrame(data_rows)
-        st.dataframe(inv_df, use_container_width=True)
-    else:
-        st.write("No stocks or cash found in any portfolio.")
+    # 3) Now compute poids for each row
+    #    so that we can show the fraction
+    for row in inventory_rows:
+        if overall_val_sum > 0:
+            row["poids"] = round((row["valorisation"] / overall_val_sum) * 100, 2)
+        else:
+            row["poids"] = 0.0
 
+    # 4) Display table
+    st.title("🗃️ Global Inventory")
+    inv_df = pd.DataFrame(inventory_rows)
+    # Use numeric columns so they are sortable
+    st.dataframe(
+        inv_df[["valeur", "quantité total", "valorisation", "poids", "portefeuille"]],
+        use_container_width=True
+    )
+
+    # 5) Show total assets under management
     st.write(f"### Actif sous gestion: {total_assets:.2f}")
 
 # ===================== Pages =====================
@@ -277,7 +310,7 @@ page = st.sidebar.selectbox(
         "Create Portfolio",
         "View Client Portfolio",
         "View All Portfolios",
-        "Inventory"  # <-- New Page
+        "Inventory"
     ]
 )
 
@@ -331,5 +364,5 @@ elif page == "View All Portfolios":
     st.title("📊 All Clients' Portfolios")
     show_all_portfolios()
 
-elif page == "Inventory":  # New Page
+elif page == "Inventory":
     show_inventory()
