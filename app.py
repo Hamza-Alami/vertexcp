@@ -148,7 +148,7 @@ def show_portfolio(client_name, key_prefix=""):
     df["poids_float"] = (df["valorisation"] / total_val) * 100
     df["poids"] = df["poids_float"].round(2)
 
-    st.subheader(f"📜 Portfolio for {client_name}")
+    st.subheader(f"📊 Portfolio for {client_name}")
 
     # Data Editor (Poids as numeric so it sorts properly)
     edited_df = st.data_editor(
@@ -280,7 +280,7 @@ elif page == "Create Portfolio":
         st.warning("No clients found. Please create a client first.")
 
 elif page == "View Client Portfolio":
-    st.title("📜 View Client Portfolio")
+    st.title("📊 View Client Portfolio")
     c2 = get_all_clients()
     if c2:
         client_selected = st.selectbox("Select Client", c2, key="view_portfolio_select")
