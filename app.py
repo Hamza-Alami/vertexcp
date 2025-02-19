@@ -23,7 +23,7 @@ def get_stock_list():
             [(s.get("name", "N/A"), s.get("dernier_cours", 0)) for s in data],
             columns=["valeur", "cours"]
         )
-        # Add Cash as a stock with price=1
+        # Add CASH as a stock with price=1
         cash_row = pd.DataFrame([{"valeur": "Cash", "cours": 1}])
         return pd.concat([df, cash_row], ignore_index=True)
     except Exception as e:
@@ -110,6 +110,10 @@ def update_client_rates(client_name, exchange_comm, is_pea, custom_tax, mgmt_fee
 
 # ===================== Portfolio Management =====================
 def create_portfolio_rows(client_name, holdings):
+    """
+    Actually create the portfolio rows for multiple stocks/cash.
+    We'll store 'vwap' as 0.0 initially, user can adjust later.
+    """
     cid = get_client_id(client_name)
     if not cid:
         st.error("Client not found.")
@@ -182,7 +186,7 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
         new_vwap = float(transaction_price)
         client.table("portfolios").insert({
             "client_id": get_client_id(client_name),
-            "valeur": stock_name,
+            "valeur": str(stock_name),
             "quantité": float(quantity),
             "vwap": float(new_vwap),
             "cours": 0.0,
@@ -200,12 +204,11 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
         client.table("portfolios").update({
             "quantité": float(new_qty),
             "vwap": float(new_vwap)
-        }).eq("client_id", get_client_id(client_name)).eq("valeur", stock_name).execute()
+        }).eq("client_id", get_client_id(client_name)).eq("valeur", str(stock_name)).execute()
 
-    # update "Cash"
+    # update "Cash" (always vwap=1)
     cash_row = df[df["valeur"] == "Cash"]
     if cash_row.empty:
-        # create row
         client.table("portfolios").insert({
             "client_id": get_client_id(client_name),
             "valeur": "Cash",
@@ -218,7 +221,8 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
         old_cash_qty = float(cash_row["quantité"].values[0])
         new_cash_qty = old_cash_qty - float(total_cost)
         client.table("portfolios").update({
-            "quantité": float(new_cash_qty)
+            "quantité": float(new_cash_qty),
+            "vwap": 1.0  # always ensure vwap=1 for Cash
         }).eq("client_id", get_client_id(client_name)).eq("valeur", "Cash").execute()
 
     st.success(f"Bought {quantity} of {stock_name} at {transaction_price:.2f}, total cost {total_cost:.2f}")
@@ -228,7 +232,7 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
 def sell_shares(client_name, stock_name, transaction_price, quantity):
     """
     Sell up to existing quantity. If there's net profit, apply tax_on_gains_rate. Always apply commission.
-    Add net proceed to 'Cash'.
+    Add net proceed to "Cash" (vwap=1).
     """
     cinfo = get_client_info(client_name)
     if not cinfo:
@@ -245,7 +249,7 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
         return
 
     old_qty = float(match["quantité"].values[0])
-    if quantity > old_qty:
+    if float(quantity) > old_qty:
         st.error(f"Cannot sell {quantity}. Only {old_qty} available.")
         return
 
@@ -255,26 +259,22 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
     commission = raw_proceeds * (exchange_rate / 100.0)
     net_proceeds = raw_proceeds - commission
 
-    # cost portion for these shares
     cost_of_shares = float(quantity) * old_vwap
     potential_profit = net_proceeds - cost_of_shares
 
     if potential_profit > 0:
-        # apply tax
         tax = potential_profit * (tax_rate / 100.0)
         net_proceeds -= tax
 
-    # update new quantity
     new_qty = old_qty - float(quantity)
     if new_qty <= 0:
-        # remove row
-        client.table("portfolios").delete().eq("client_id", get_client_id(client_name)).eq("valeur", stock_name).execute()
+        client.table("portfolios").delete().eq("client_id", get_client_id(client_name)).eq("valeur", str(stock_name)).execute()
     else:
         client.table("portfolios").update({
             "quantité": float(new_qty)
-        }).eq("client_id", get_client_id(client_name)).eq("valeur", stock_name).execute()
+        }).eq("client_id", get_client_id(client_name)).eq("valeur", str(stock_name)).execute()
 
-    # add net proceeds to "Cash"
+    # update Cash
     cash_row = df[df["valeur"] == "Cash"]
     if cash_row.empty:
         client.table("portfolios").insert({
@@ -289,7 +289,8 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
         old_cash_qty = float(cash_row["quantité"].values[0])
         new_cash_qty = old_cash_qty + float(net_proceeds)
         client.table("portfolios").update({
-            "quantité": float(new_cash_qty)
+            "quantité": float(new_cash_qty),
+            "vwap": 1.0
         }).eq("client_id", get_client_id(client_name)).eq("valeur", "Cash").execute()
 
     st.success(f"Sold {quantity} of {stock_name} at {transaction_price:.2f}, net {net_proceeds:.2f} after commission/tax.")
@@ -304,85 +305,104 @@ def show_portfolio(client_name, read_only=False):
 
     # Recompute cours & valorisation from 'stocks'
     for i, row in df.iterrows():
-        match = stocks[stocks["valeur"] == row["valeur"]]
+        valn = str(row["valeur"])
+        match = stocks[stocks["valeur"] == valn]
         live_price = float(match["cours"].values[0]) if not match.empty else 0.0
         df.at[i, "cours"] = live_price
         # valorisation = quantity * cours
-        df.at[i, "valorisation"] = float(row["quantité"]) * live_price
-
-        cost_tot = float(row["quantité"]) * float(row.get("vwap", 0.0))
+        quant = float(row["quantité"])
+        vwap_ = float(row.get("vwap", 0.0))
+        df.at[i, "valorisation"] = quant * live_price
+        cost_tot = quant * vwap_
         df.at[i, "cost_total"] = cost_tot
-        df.at[i, "performance_latente"] = df.at[i, "valorisation"] - cost_tot
+        df.at[i, "performance_latente"] = (quant * live_price) - cost_tot
 
     total_value = df["valorisation"].sum()
-    df["poids"] = ((df["valorisation"] / total_value) * 100).round(2) if total_value else 0
+    if total_value > 0:
+        df["poids"] = ((df["valorisation"] / total_value) * 100).round(2)
+    else:
+        df["poids"] = 0.0
 
     st.subheader(f"📜 Portfolio for {client_name}")
     st.write(f"**Valorisation totale du portefeuille:** {total_value:.2f}")
 
-    # Also show the client commissions/taxes so we can edit them here:
-    cinfo = get_client_info(client_name)
-    if cinfo:
-        st.write("#### Client Commission & Fee Setup")
-        exch_comm_default = float(cinfo.get("exchange_commission_rate", 0.0))
-        mgmt_default = float(cinfo.get("management_fee_rate", 0.0))
-        is_pea_default = bool(cinfo.get("is_pea", False))
-        tax_default = float(cinfo.get("tax_on_gains_rate", 15.0))
-
-        with st.form(f"client_rates_form_{client_name}", clear_on_submit=True):
-            new_exch = st.number_input("Exchange Commission Rate (%)", min_value=0.0, value=exch_comm_default, step=0.01)
-            new_mgmt = st.number_input("Management Fee Rate (%)", min_value=0.0, value=mgmt_default, step=0.01)
-            new_pea = st.checkbox("Is PEA (Tax Exempt)?", value=is_pea_default)
-            new_tax = st.number_input("Custom Tax on Gains (%)", min_value=0.0, value=tax_default, step=0.01)
-            if st.form_submit_button("Update Rates"):
+    # Collapsible area for editing client commissions/taxes
+    with st.expander("Edit Client Commission/Taxes/Fees", expanded=False):
+        cinfo = get_client_info(client_name)
+        if cinfo:
+            exch = float(cinfo.get("exchange_commission_rate", 0.0))
+            mgf = float(cinfo.get("management_fee_rate", 0.0))
+            pea = bool(cinfo.get("is_pea", False))
+            tax = float(cinfo.get("tax_on_gains_rate", 15.0))
+            new_exch = st.number_input("Exchange Commission Rate (%)", min_value=0.0, value=exch, step=0.01)
+            new_mgmt = st.number_input("Management Fee Rate (%)", min_value=0.0, value=mgf, step=0.01)
+            new_pea = st.checkbox("Is PEA (Tax Exempt)?", value=pea)
+            new_tax = st.number_input("Tax on Gains (%)", min_value=0.0, value=tax, step=0.01)
+            if st.button("Update Client Rates"):
                 update_client_rates(client_name, new_exch, new_pea, new_tax, new_mgmt)
-    else:
-        st.write("No client info found to display commissions/fees.")
+        else:
+            st.write("Client info not found to set rates.")
+
+    # Data styling for performance_latente
+    # We'll style in a separate st.dataframe() because st.data_editor doesn't currently support applymap styling
+    df_display = df[["valeur","quantité","vwap","cours","cost_total","valorisation","performance_latente","poids"]].copy()
+
+    def highlight_perf(val):
+        if val > 0:
+            return "color:green;"
+        elif val < 0:
+            return "color:red;"
+        return ""
+
+    df_styled = df_display.style.applymap(highlight_perf, subset=["performance_latente"])
 
     if read_only:
-        st.dataframe(
-            df[["valeur", "quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids"]],
-            use_container_width=True
-        )
+        st.dataframe(df_styled, use_container_width=True)
     else:
-        # data_editor with new columns
-        edited_df = st.data_editor(
-            df[["valeur", "quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids"]],
+        # We still do st.dataframe for the style
+        st.write("#### Current Holdings (edit below if needed)")        
+        st.dataframe(df_styled, use_container_width=True)
+
+        # data_editor only for the columns that can be edited: quantity, vwap
+        editable_cols = ["valeur","quantité","vwap"]
+        ed_df = df[editable_cols].copy()
+
+        st.write("#### Edit (Quantity / VWAP) if you made a mistake")
+        updated_df = st.data_editor(
+            ed_df,
             use_container_width=True,
-            column_config={
-                "vwap": st.column_config.NumberColumn("VWAP", format="%.2f"),
-                "cost_total": st.column_config.NumberColumn("Coût Total", format="%.2f"),
-                "valorisation": st.column_config.NumberColumn("Valorisation", format="%.2f"),
-                "performance_latente": st.column_config.NumberColumn("Performance Latente", format="%.2f"),
-                "poids": st.column_config.NumberColumn("Poids (%)", format="%.2f", step=0.01)
-            },
-            key=f"pf_editor_{client_name}"
+            key=f"portfolio_editor_{client_name}"
         )
-        if st.button(f"💾 Save Portfolio Changes ({client_name})", key=f"save_btn_{client_name}"):
-            for index, row in edited_df.iterrows():
+
+        if st.button(f"💾 Save Edits for {client_name}", key=f"save_portfolio_edits_{client_name}"):
+            # update DB
+            for idx, row in updated_df.iterrows():
+                valn = str(row["valeur"])
+                qn = float(row["quantité"])
+                vw = float(row["vwap"])
                 client.table("portfolios").update({
-                    "quantité": float(row["quantité"]),
-                    "vwap": float(row["vwap"])
-                }).eq("client_id", get_client_id(client_name)).eq("valeur", row["valeur"]).execute()
+                    "quantité": qn,
+                    "vwap": vw
+                }).eq("client_id", get_client_id(client_name)).eq("valeur", valn).execute()
             st.success(f"Portfolio updated for '{client_name}'!")
             st.experimental_rerun()
 
-        # "Buy" transaction
+        # Buy
         st.write("### Buy Transaction")
         buy_stock = st.selectbox(f"Stock to BUY for {client_name}", stocks["valeur"].tolist(), key=f"buy_s_{client_name}")
         buy_price = st.number_input(f"Buy Price for {buy_stock}", min_value=0.0, value=0.0, step=0.01, key=f"buy_price_{client_name}")
         buy_qty = st.number_input(f"Buy Quantity for {buy_stock}", min_value=1, value=1, key=f"buy_qty_{client_name}")
         if st.button(f"BUY {buy_stock}", key=f"buy_btn_{client_name}"):
-            buy_shares(client_name, buy_stock, float(buy_price), float(buy_qty))
+            buy_shares(client_name, buy_stock, buy_price, buy_qty)
 
-        # "Sell" transaction
+        # Sell
         st.write("### Sell Transaction")
         existing_stocks = df[df["valeur"] != "Cash"]["valeur"].unique().tolist()
         sell_stock = st.selectbox(f"Stock to SELL for {client_name}", existing_stocks, key=f"sell_s_{client_name}")
         sell_price = st.number_input(f"Sell Price for {sell_stock}", min_value=0.0, value=0.0, step=0.01, key=f"sell_price_{client_name}")
         sell_qty = st.number_input(f"Sell Quantity for {sell_stock}", min_value=1, value=1, key=f"sell_qty_{client_name}")
         if st.button(f"SELL {sell_stock}", key=f"sell_btn_{client_name}"):
-            sell_shares(client_name, sell_stock, float(sell_price), float(sell_qty))
+            sell_shares(client_name, sell_stock, sell_price, sell_qty)
 
 # ===================== Show All Portfolios =====================
 def show_all_portfolios():
@@ -410,7 +430,7 @@ def show_inventory():
         if not df.empty:
             portfolio_val = 0.0
             for _, row in df.iterrows():
-                val = row["valeur"]
+                val = str(row["valeur"])
                 qty = float(row["quantité"])
                 # find current price
                 match = stocks[stocks["valeur"] == val]
@@ -502,23 +522,6 @@ if page == "Manage Clients":
             delete_choice = st.selectbox("Select Client to Delete", options=existing, key="delete_choice")
             if st.form_submit_button("🗑️ Delete Client"):
                 delete_client(delete_choice)
-
-        # We can also set client rates here in an extra form if we want:
-        st.write("### Set Client Commission / Tax / Fee")
-        with st.form("set_commission_form", clear_on_submit=True):
-            pick_client = st.selectbox("Pick Client to set rates", existing, key="pick_client_rates")
-            cinfo = get_client_info(pick_client)
-            exch = cinfo.get("exchange_commission_rate", 0.0) if cinfo else 0.0
-            mgf = cinfo.get("management_fee_rate", 0.0) if cinfo else 0.0
-            pea = cinfo.get("is_pea", False) if cinfo else False
-            tax = cinfo.get("tax_on_gains_rate", 15.0) if cinfo else 15.0
-
-            new_exch = st.number_input("Exchange Commission (%)", min_value=0.0, value=float(exch), step=0.01)
-            new_mgmt = st.number_input("Management Fee Rate (%)", min_value=0.0, value=float(mgf), step=0.01)
-            new_pea = st.checkbox("Is PEA (Tax Exempt)?", value=bool(pea))
-            new_tax = st.number_input("Tax on Gains (%)", min_value=0.0, value=float(tax), step=0.01)
-            if st.form_submit_button("Update Rates"):
-                update_client_rates(pick_client, new_exch, new_pea, new_tax, new_mgmt)
 
 elif page == "Create Portfolio":
     st.title("📊 Create Client Portfolio")
