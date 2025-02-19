@@ -23,7 +23,7 @@ def get_stock_list():
             [(s.get("name", "N/A"), s.get("dernier_cours", 0)) for s in data],
             columns=["valeur", "cours"]
         )
-        # Add CASH
+        # Add CASH row
         cash_row = pd.DataFrame([{"valeur": "Cash", "cours": 1}])
         return pd.concat([df, cash_row], ignore_index=True)
     except Exception as e:
@@ -31,6 +31,64 @@ def get_stock_list():
         return pd.DataFrame(columns=["valeur", "cours"])
 
 stocks = get_stock_list()
+
+# ===================== Load Instruments for Poids Masi =====================
+def get_instruments():
+    """
+    Return a DataFrame [instrument_name, nombre_de_titres, facteur_flottant]
+    from the 'instruments' table in Supabase.
+    """
+    res = client.table("instruments").select("*").execute()
+    if not res.data:
+        return pd.DataFrame(columns=["instrument_name","nombre_de_titres","facteur_flottant"])
+    df = pd.DataFrame(res.data)
+    needed_cols = ["instrument_name","nombre_de_titres","facteur_flottant"]
+    for col in needed_cols:
+        if col not in df.columns:
+            df[col] = None
+    return df[needed_cols].copy()
+
+def compute_poids_masi():
+    """
+    Builds a dictionary: { valeur_name: {"capitalisation":X, "poids_masi":Y}, ... }
+      - "capitalisation" = cours * nombre_de_titres
+      - "poids_masi" = (cours * nombre_de_titres * facteur_flottant) / sum_of_all(...) * 100
+    We rely on the 'instruments' table + your 'stocks' (API).
+    """
+    instruments_df = get_instruments()
+    if instruments_df.empty:
+        return {}
+
+    # rename instrument_name to 'valeur' to merge with the 'stocks' DataFrame
+    instr_renamed = instruments_df.rename(columns={"instrument_name":"valeur"})
+    # merge on 'valeur'
+    merged = pd.merge(instr_renamed, stocks, on="valeur", how="left")
+    # fill missing if no match
+    merged["cours"] = merged["cours"].fillna(0.0).astype(float)
+    merged["nombre_de_titres"] = merged["nombre_de_titres"].astype(float)
+    merged["facteur_flottant"] = merged["facteur_flottant"].astype(float)
+
+    merged["capitalisation"] = merged["cours"] * merged["nombre_de_titres"]
+    # floated portion for Poids Masi
+    merged["floated_cap"] = merged["capitalisation"] * merged["facteur_flottant"]
+    total_floated_cap = merged["floated_cap"].sum()
+
+    if total_floated_cap <= 0:
+        merged["poids_masi"] = 0.0
+    else:
+        merged["poids_masi"] = (merged["floated_cap"] / total_floated_cap)*100.0
+
+    outdict = {}
+    for _, row in merged.iterrows():
+        val = row["valeur"]
+        outdict[val] = {
+            "capitalisation": row["capitalisation"],
+            "poids_masi": row["poids_masi"]
+        }
+    return outdict
+
+# We'll compute once globally. Recompute if you prefer each time:
+poids_masi_map = compute_poids_masi()
 
 # ===================== Helper Functions ========================
 def get_all_clients():
@@ -47,7 +105,7 @@ def get_client_id(client_name):
     cinfo = get_client_info(client_name)
     if not cinfo:
         return None
-    return int(cinfo["id"])  # must be integer
+    return int(cinfo["id"])
 
 def client_has_portfolio(client_name):
     cid = get_client_id(client_name)
@@ -144,7 +202,6 @@ def create_portfolio_rows(client_name, holdings):
         return
 
     try:
-        # upsert with on_conflict
         client.table("portfolios").upsert(rows, on_conflict="client_id,valeur").execute()
         st.success(f"Portfolio created for '{client_name}'!")
         st.experimental_rerun()
@@ -176,14 +233,6 @@ def new_portfolio_creation_ui(client_name):
 
 # ===================== "Buy" Transaction =====================
 def buy_shares(client_name, stock_name, transaction_price, quantity):
-    """
-    1) Check if we have enough Cash:
-       If not, show error & return
-    2) cost basis for vwap includes commission => cost_with_comm = price * qty + commission
-    3) if stock doesn't exist, we set vwap to cost_with_comm / qty
-       if stock does exist, old_cost_total + cost_with_comm / new_qty
-    4) update Cash
-    """
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Client info not found.")
@@ -194,26 +243,25 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
         return
 
     df = get_portfolio(client_name)
-    # Commission
     exchange_rate = float(cinfo.get("exchange_commission_rate", 0.0))
+
     raw_cost = transaction_price * quantity
     commission = raw_cost * (exchange_rate/100.0)
     cost_with_comm = raw_cost + commission
 
-    # 1) Check if we have enough Cash
-    cash_match = df[df["valeur"] == "Cash"]
+    # check Cash
+    cash_match = df[df["valeur"]=="Cash"]
     current_cash = 0.0
     if not cash_match.empty:
         current_cash = float(cash_match["quantité"].values[0])
-    if cost_with_comm > current_cash:
-        st.error(f"Insufficient cash. You have {current_cash:.2f}, need {cost_with_comm:.2f} to buy.")
+    if cost_with_comm>current_cash:
+        st.error(f"Insufficient cash. You have {current_cash:.2f}, need {cost_with_comm:.2f}.")
         return
 
-    # 2) stock's new vwap
-    match = df[df["valeur"] == stock_name]
+    match = df[df["valeur"]==stock_name]
     if match.empty:
         # new row
-        new_vwap = cost_with_comm / quantity
+        new_vwap = cost_with_comm/quantity
         try:
             client.table("portfolios").upsert([{
                 "client_id": cid,
@@ -229,13 +277,10 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
     else:
         old_qty = float(match["quantité"].values[0])
         old_vwap = float(match["vwap"].values[0])
-        old_cost_total = old_qty * old_vwap
-        new_cost_total = old_cost_total + cost_with_comm
-        new_qty = old_qty + quantity
-        if new_qty > 0:
-            new_vwap = new_cost_total / new_qty
-        else:
-            new_vwap = 0.0
+        old_cost = old_qty*old_vwap
+        new_cost = old_cost+cost_with_comm
+        new_qty = old_qty+quantity
+        new_vwap = new_cost/new_qty if new_qty>0 else 0.0
         try:
             client.table("portfolios").update({
                 "quantité": new_qty,
@@ -245,14 +290,13 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
             st.error(f"Error updating existing stock: {e}")
             return
 
-    # 3) update Cash
+    # update Cash
     if cash_match.empty:
-        # insert a new row with negative cost
         try:
             client.table("portfolios").upsert([{
                 "client_id": cid,
                 "valeur": "Cash",
-                "quantité": current_cash - cost_with_comm,
+                "quantité": current_cash-cost_with_comm,
                 "vwap": 1.0,
                 "cours": 0.0,
                 "valorisation": 0.0
@@ -261,7 +305,7 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
             st.error(f"Error creating cash row: {e}")
             return
     else:
-        new_cash = current_cash - cost_with_comm
+        new_cash = current_cash-cost_with_comm
         try:
             client.table("portfolios").update({
                 "quantité": new_cash,
@@ -276,15 +320,6 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
 
 # ===================== "Sell" Transaction =====================
 def sell_shares(client_name, stock_name, transaction_price, quantity):
-    """
-    1) check user holds 'quantity' of stock
-    2) cost_of_shares => old_vwap * quantity
-       raw_proceeds => price * qty
-       commission => raw_proceeds * exchange_rate
-       net_proceeds => raw_proceeds - commission - taxIfProfit
-    3) update stock's quantity
-    4) add net_proceeds to cash
-    """
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Client info not found.")
@@ -298,30 +333,30 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
     tax_rate = float(cinfo.get("tax_on_gains_rate", 15.0))
 
     df = get_portfolio(client_name)
-    match = df[df["valeur"] == stock_name]
+    match = df[df["valeur"]==stock_name]
     if match.empty:
         st.error(f"Client does not hold {stock_name}.")
         return
 
     old_qty = float(match["quantité"].values[0])
-    if quantity > old_qty:
+    if quantity>old_qty:
         st.error(f"Cannot sell {quantity}, only {old_qty} available.")
         return
 
     old_vwap = float(match["vwap"].values[0])
-    raw_proceeds = transaction_price * quantity
-    commission = raw_proceeds * (exchange_rate/100.0)
-    net_proceeds = raw_proceeds - commission
+    raw_proceeds = transaction_price*quantity
+    commission = raw_proceeds*(exchange_rate/100.0)
+    net_proceeds = raw_proceeds-commission
 
-    cost_of_shares = old_vwap * quantity
-    profit = net_proceeds - cost_of_shares
-    if profit > 0:
-        tax = profit * (tax_rate/100.0)
-        net_proceeds -= tax
+    cost_of_shares = old_vwap*quantity
+    profit = net_proceeds-cost_of_shares
+    if profit>0:
+        tax = profit*(tax_rate/100.0)
+        net_proceeds-=tax
 
-    new_qty = old_qty - quantity
+    new_qty = old_qty-quantity
     try:
-        if new_qty <= 0.0:
+        if new_qty<=0:
             client.table("portfolios").delete().eq("client_id", cid).eq("valeur", str(stock_name)).execute()
         else:
             client.table("portfolios").update({
@@ -332,12 +367,12 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
         return
 
     # update Cash
-    cash_match = df[df["valeur"] == "Cash"]
+    cash_match = df[df["valeur"]=="Cash"]
     old_cash = 0.0
     if not cash_match.empty:
         old_cash = float(cash_match["quantité"].values[0])
+    new_cash = old_cash+net_proceeds
 
-    new_cash = old_cash + net_proceeds
     try:
         if cash_match.empty:
             client.table("portfolios").upsert([{
@@ -362,6 +397,8 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
 
 # ===================== Show Single Portfolio =====================
 def show_portfolio(client_name, read_only=False):
+    global poids_masi_map  # from compute_poids_masi
+
     cid = get_client_id(client_name)
     if cid is None:
         st.warning("Client not found.")
@@ -371,57 +408,54 @@ def show_portfolio(client_name, read_only=False):
         st.warning(f"No portfolio found for '{client_name}'")
         return
 
-    # Recompute from 'stocks'
-    df = df.copy()  # avoid SettingWithCopy
+    df = df.copy()
     if "quantité" in df.columns:
         df["quantité"] = df["quantité"].astype(float)
 
-    # Calculate columns
     for i, row in df.iterrows():
         val = str(row["valeur"])
-        match = stocks[stocks["valeur"] == val]
-        if not match.empty:
-            live_price = float(match["cours"].values[0])
-        else:
-            live_price = 0.0
-        df.at[i, "cours"] = live_price
+        match = stocks[stocks["valeur"]==val]
+        live_price = float(match["cours"].values[0]) if not match.empty else 0.0
+        df.at[i,"cours"] = live_price
         qty_ = float(row["quantité"])
-        vw_ = float(row.get("vwap", 0.0))
-        val_ = qty_ * live_price
-        df.at[i, "valorisation"] = round(val_,2)
-        cost_ = round(qty_ * vw_, 2)
-        df.at[i, "cost_total"] = cost_
-        df.at[i, "performance_latente"] = round(val_ - cost_,2)
+        vw_ = float(row.get("vwap",0.0))
+        val_ = round(qty_*live_price, 2)
+        df.at[i,"valorisation"] = val_
+        cost_ = round(qty_*vw_,2)
+        df.at[i,"cost_total"] = cost_
+        df.at[i,"performance_latente"] = round(val_-cost_,2)
+
+        # Poids Masi: if "Cash" => 0, else from poids_masi_map
+        if val=="Cash":
+            df.at[i,"poids_masi"] = 0.0
+        else:
+            info = poids_masi_map.get(val, {"poids_masi":0.0})
+            df.at[i,"poids_masi"] = info["poids_masi"]
 
     total_val = df["valorisation"].sum()
-    if total_val > 0:
-        df["poids"] = ((df["valorisation"] / total_val) * 100).round(2)
+    if total_val>0:
+        df["poids"] = ((df["valorisation"]/total_val)*100).round(2)
     else:
         df["poids"] = 0.0
 
-    # Sort so that "Cash" is at bottom
+    # put "Cash" at bottom
     df["__cash_marker"] = df["valeur"].apply(lambda x: 1 if x=="Cash" else 0)
     df.sort_values("__cash_marker", inplace=True, ignore_index=True)
 
     st.subheader(f"📜 Portfolio for {client_name}")
     st.write(f"**Valorisation totale du portefeuille:** {total_val:.2f}")
 
-    # read_only => remove advanced columns + style
     if read_only:
-        # Also drop id, client_id, is_cash if exist
-        drop_cols = ["id", "client_id", "is_cash", "__cash_marker"]
+        drop_cols = ["id","client_id","is_cash","__cash_marker"]
         for c in drop_cols:
             if c in df.columns:
                 df.drop(columns=c, inplace=True)
-
-        columns_display = ["valeur","quantité","vwap","cours","cost_total","valorisation","performance_latente","poids"]
-        # in case some are missing
-        available_cols = [c for c in columns_display if c in df.columns]
+        columns_display = ["valeur","quantité","vwap","cours","cost_total","valorisation","performance_latente","poids","poids_masi"]
+        available_cols = [x for x in columns_display if x in df.columns]
         df_display = df[available_cols].copy()
 
-        # styling
         def color_perf(x):
-            if isinstance(x, (float,int)) and x>0:
+            if isinstance(x,(float,int)) and x>0:
                 return "color:green;"
             elif isinstance(x,(float,int)) and x<0:
                 return "color:red;"
@@ -431,14 +465,15 @@ def show_portfolio(client_name, read_only=False):
                 return ["font-weight:bold;"]*len(row)
             return ["" for _ in row]
 
-        df_styled = df_display.style.format("{:.2f}", subset=["quantité","vwap","cours","cost_total","valorisation","performance_latente","poids"]) \
-                                    .applymap(color_perf, subset=["performance_latente"]) \
-                                    .apply(bold_cash, axis=1)
+        df_styled = df_display.style.format(
+            "{:.2f}",
+            subset=["quantité","vwap","cours","cost_total","valorisation","performance_latente","poids","poids_masi"]
+        ).applymap(color_perf, subset=["performance_latente"]) \
+         .apply(bold_cash, axis=1)
         st.dataframe(df_styled, use_container_width=True)
         return
 
-    # not read_only => do everything
-    # Commission Editor
+    # not read_only => same approach
     with st.expander(f"Edit Commission/Taxes/Fees for {client_name}", expanded=False):
         cinfo = get_client_info(client_name)
         if cinfo:
@@ -453,11 +488,9 @@ def show_portfolio(client_name, read_only=False):
             if st.button(f"Update Client Rates - {client_name}", key=f"update_rates_{client_name}"):
                 update_client_rates(client_name, new_exch, new_pea, new_tax, new_mgmt)
 
-    # reorder columns
-    columns_display = ["valeur","quantité","vwap","cours","cost_total","valorisation","performance_latente","poids","__cash_marker"]
+    columns_display = ["valeur","quantité","vwap","cours","cost_total","valorisation","performance_latente","poids_masi","poids","__cash_marker"]
     df = df[columns_display].copy()
 
-    # style
     def color_perf(x):
         if isinstance(x, (float,int)) and x>0:
             return "color:green;"
@@ -471,15 +504,14 @@ def show_portfolio(client_name, read_only=False):
 
     df_styled = df.drop(columns="__cash_marker").style.format(
         "{:.2f}",
-        subset=["quantité","vwap","cours","cost_total","valorisation","performance_latente","poids"]
+        subset=["quantité","vwap","cours","cost_total","valorisation","performance_latente","poids_masi","poids"]
     ).applymap(color_perf, subset=["performance_latente"]) \
      .apply(bold_cash, axis=1)
 
-    st.write("#### Current Holdings (read-only table with color styling, Cash at bottom bold)")
+    st.write("#### Current Holdings (Poids Masi shown, 0% if Cash)")
     st.dataframe(df_styled, use_container_width=True)
 
     with st.expander("Manual Edits (Quantity / VWAP)", expanded=False):
-        # data_editor only for columns: quantity, vwap
         edit_cols = ["valeur","quantité","vwap"]
         edf = df[edit_cols].drop(columns="__cash_marker", errors="ignore").copy()
         updated_df = st.data_editor(
@@ -516,7 +548,7 @@ def show_portfolio(client_name, read_only=False):
 
     # SELL
     st.write("### Sell Transaction")
-    existing_stocks = df[df["valeur"] != "Cash"]["valeur"].unique().tolist()
+    existing_stocks = df[df["valeur"]!="Cash"]["valeur"].unique().tolist()
     sell_stock = st.selectbox(f"Stock to SELL for {client_name}", existing_stocks, key=f"sell_s_{client_name}")
     sell_price = st.number_input(f"Sell Price for {sell_stock}", min_value=0.0, value=0.0, step=0.01, key=f"sell_price_{client_name}")
     sell_qty = st.number_input(f"Sell Quantity for {sell_stock}", min_value=1.0, value=1.0, step=0.01, key=f"sell_qty_{client_name}")
@@ -527,14 +559,12 @@ def show_portfolio(client_name, read_only=False):
 def show_all_portfolios():
     """
     We show each client's portfolio in read_only mode,
-    dropping columns: id, client_id, is_cash if present,
-    sorting so that Cash is at bottom, bold, etc.
+    removing columns if present, sorting so that Cash is at bottom, etc.
     """
     clients = get_all_clients()
     if not clients:
         st.warning("No clients found.")
         return
-
     for cname in clients:
         st.write(f"### Client: {cname}")
         show_portfolio(cname, read_only=True)
@@ -547,7 +577,7 @@ def show_inventory():
         st.warning("No clients found. Please create a client first.")
         return
 
-    master_data = defaultdict(lambda: {"quantity": 0, "clients": set()})
+    master_data = defaultdict(lambda: {"quantity":0.0,"clients":set()})
     overall_portfolio_sum = 0.0
 
     for c in clients:
@@ -557,26 +587,25 @@ def show_inventory():
             for _, row in df.iterrows():
                 val = str(row["valeur"])
                 qty = float(row["quantité"])
-                match = stocks[stocks["valeur"] == val]
+                match = stocks[stocks["valeur"]==val]
                 price = float(match["cours"].values[0]) if not match.empty else 0.0
-                val_agg = qty * price
+                val_agg = qty*price
                 portfolio_val += val_agg
-                master_data[val]["quantity"] += qty
+                master_data[val]["quantity"]+=qty
                 master_data[val]["clients"].add(c)
-            overall_portfolio_sum += portfolio_val
+            overall_portfolio_sum+=portfolio_val
 
     if not master_data:
         st.title("🗃️ Global Inventory")
         st.write("No stocks or cash found in any portfolio.")
         return
 
-    rows_data = []
-    sum_of_all_stocks_val = 0.0
-
-    for val, info in master_data.items():
-        match = stocks[stocks["valeur"] == val]
+    rows_data=[]
+    sum_of_all_stocks_val=0.0
+    for val,info in master_data.items():
+        match = stocks[stocks["valeur"]==val]
         price = float(match["cours"].values[0]) if not match.empty else 0.0
-        agg_val = info["quantity"] * price
+        agg_val = info["quantity"]*price
         sum_of_all_stocks_val += agg_val
         rows_data.append({
             "valeur": val,
@@ -584,30 +613,57 @@ def show_inventory():
             "valorisation": agg_val,
             "portefeuille": ", ".join(sorted(info["clients"]))
         })
-
     for row in rows_data:
-        if sum_of_all_stocks_val > 0:
-            row["poids"] = round((row["valorisation"] / sum_of_all_stocks_val)*100, 2)
+        if sum_of_all_stocks_val>0:
+            row["poids"] = round((row["valorisation"]/sum_of_all_stocks_val)*100,2)
         else:
             row["poids"] = 0.0
 
     st.title("🗃️ Global Inventory")
     inv_df = pd.DataFrame(rows_data)
     st.dataframe(
-        inv_df[["valeur", "quantité total", "valorisation", "poids", "portefeuille"]],
+        inv_df[["valeur","quantité total","valorisation","poids","portefeuille"]],
         use_container_width=True
     )
-
     st.write(f"### Actif sous gestion: {overall_portfolio_sum:.2f}")
 
-# ===================== Market Page =====================
+# ===================== Market Page (with Capitalisation, Poids Masi) =====================
 def show_market():
     st.title("📈 Market")
-    st.write("Below are the current stocks/cash with real-time prices (refreshed every minute).")
-    market_df = get_stock_list()
-    st.dataframe(market_df, use_container_width=True)
+    st.write("Below are the current stocks/cash with real-time prices, plus Capitalisation & Poids Masi.")
 
-# ===================== Pages =====================
+    # Recompute if needed or use global
+    market_map = compute_poids_masi()
+    if not market_map:
+        st.warning("No instruments found or no matching data. Please check DB.")
+        return
+
+    # Build rows
+    rows=[]
+    for val,info in market_map.items():
+        rows.append({
+            "valeur": val,
+            "Capitalisation": info["capitalisation"],
+            "Poids Masi": info["poids_masi"]
+        })
+    df_market = pd.DataFrame(rows)
+    # Merge with 'stocks' to get cours
+    df_market = pd.merge(df_market, stocks, on="valeur", how="left")
+    df_market.rename(columns={"cours":"Cours"}, inplace=True)
+
+    # reorder columns
+    df_market = df_market[["valeur","Cours","Capitalisation","Poids Masi"]]
+
+    def style_poids(x):
+        return ""
+
+    df_styled = df_market.style.format(
+        subset=["Cours","Capitalisation","Poids Masi"],
+        formatter="{:.2f}"
+    ).applymap(style_poids, subset=["Poids Masi"])
+    st.dataframe(df_styled, use_container_width=True)
+
+# ===================== Page Routing =====================
 page = st.sidebar.selectbox(
     "📂 Navigation",
     [
