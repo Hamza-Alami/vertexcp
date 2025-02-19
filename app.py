@@ -9,9 +9,13 @@ supabase_url = st.secrets["supabase"]["url"]
 supabase_key = st.secrets["supabase"]["key"]
 client = create_client(supabase_url, supabase_key)
 
-# ===================== Fetch Stock Data (With Auto-Refresh) =====================
-@st.cache_data(ttl=60)  # Cache expires every 60 seconds
+# ===================== Fetch Stock Data (auto-refresh every minute) =====================
+@st.cache_data(ttl=60)
 def get_stock_list():
+    """
+    Fetch the latest stock/cash prices from IDBourse.
+    Caches for 60 seconds, so it's up to date each minute.
+    """
     try:
         response = requests.get("https://backend.idbourse.com/api_2/get_all_data", timeout=10)
         response.raise_for_status()
@@ -20,7 +24,7 @@ def get_stock_list():
             [(s.get("name", "N/A"), s.get("dernier_cours", 0)) for s in data],
             columns=["valeur", "cours"]
         )
-        # Add CASH as a stock with a price of 1
+        # Add Cash as a stock with a price of 1
         cash_row = pd.DataFrame([{"valeur": "Cash", "cours": 1}])
         return pd.concat([df, cash_row], ignore_index=True)
     except Exception as e:
@@ -77,7 +81,10 @@ def delete_client(cname):
 
 # ===================== Portfolio Management =====================
 def create_portfolio_rows(client_name, holdings):
-    """Actually create the portfolio rows for multiple stocks/cash."""
+    """
+    Actually create the portfolio rows for multiple stocks/cash.
+    We store 'quantité' in DB, but we'll recompute 'cours' & 'valorisation' dynamically later.
+    """
     cid = get_client_id(client_name)
     if not cid:
         st.error("Client not found.")
@@ -90,14 +97,14 @@ def create_portfolio_rows(client_name, holdings):
     rows = []
     for stock, qty in holdings.items():
         if qty > 0:
-            price = stocks.loc[stocks["valeur"] == stock, "cours"].values[0]
-            val = qty * price
+            # We won't rely on old stored cours/valorisation in the DB
+            # We'll store them as 0 or placeholders
             rows.append({
                 "client_id": cid,
                 "valeur": stock,
                 "quantité": qty,
-                "cours": price,
-                "valorisation": val
+                "cours": 0.0,           # placeholder
+                "valorisation": 0.0     # placeholder
             })
     if rows:
         client.table("portfolios").upsert(rows).execute()
@@ -115,7 +122,10 @@ def get_portfolio(client_name):
 
 # ===================== Create Portfolio UI =====================
 def new_portfolio_creation_ui(client_name):
-    """Lets user add multiple stocks/cash before final creation."""
+    """
+    Lets user add multiple stocks/cash before final creation.
+    We'll store only 'quantité' in DB for each stock. 'cours' & 'valorisation' are placeholders.
+    """
     st.subheader(f"➕ Add Initial Holdings for {client_name}")
     if "temp_holdings" not in st.session_state:
         st.session_state.temp_holdings = {}
@@ -143,31 +153,45 @@ def new_portfolio_creation_ui(client_name):
 def show_portfolio(client_name, read_only=False):
     """
     Display or edit a single portfolio.
-    If read_only=True, it shows a read-only table (like in All Portfolios).
+    We dynamically compute 'cours' and 'valorisation' from the fresh 'stocks' data each time.
+    If read_only=True, we show a read-only table.
     """
     df = get_portfolio(client_name)
     if df.empty:
         st.warning(f"No portfolio found for '{client_name}'")
         return
 
+    # Recompute 'cours' & 'valorisation' for each row using the current 'stocks' data
+    for i, row in df.iterrows():
+        current_price_row = stocks.loc[stocks["valeur"] == row["valeur"]]
+        if not current_price_row.empty:
+            live_price = current_price_row["cours"].values[0]
+        else:
+            # fallback if not found
+            live_price = 0.0
+        df.at[i, "cours"] = live_price
+        df.at[i, "valorisation"] = row["quantité"] * live_price
+
     total_value = df["valorisation"].sum()
-    # Store 'poids' as numeric float for sorting
-    df["poids"] = ((df["valorisation"] / total_value) * 100).round(2)
+
+    # Store 'poids' as numeric float
+    df["poids"] = ((df["valorisation"] / total_value) * 100).round(2) if total_value else 0
 
     st.subheader(f"📜 Portfolio for {client_name}")
     st.write(f"**Valorisation totale du portefeuille:** {total_value:.2f}")
 
     if read_only:
-        # Read-only display
-        st.dataframe(df[["valeur", "quantité", "valorisation", "poids"]], use_container_width=True)
+        # Read-only
+        st.dataframe(df[["valeur", "quantité", "cours", "valorisation", "poids"]], use_container_width=True)
     else:
-        # Editable table
+        # data_editor for editing quantity
         edited_df = st.data_editor(
-            df[["valeur", "quantité", "valorisation", "poids"]],
+            df[["valeur", "quantité", "cours", "valorisation", "poids"]],
             use_container_width=True,
             column_config={
                 "poids": st.column_config.NumberColumn("Poids (%)", format="%.2f", step=0.01),
                 "valorisation": st.column_config.NumberColumn("Valorisation", format="%.2f"),
+                "cours": st.column_config.NumberColumn("Cours", format="%.2f"),
                 "quantité": st.column_config.NumberColumn("Quantité")
             },
             key=f"pf_editor_{client_name}"
@@ -175,12 +199,11 @@ def show_portfolio(client_name, read_only=False):
 
         # Save changes
         if st.button(f"💾 Save Portfolio Changes ({client_name})", key=f"save_btn_{client_name}"):
+            # Only 'quantité' is stored in DB. 'cours' & 'valorisation' are always recalculated.
             for index, row in edited_df.iterrows():
-                price = stocks.loc[stocks["valeur"] == row["valeur"], "cours"].values[0]
-                updated_val = row["quantité"] * price
+                # Update the DB with the new 'quantité' only
                 client.table("portfolios").update({
-                    "quantité": row["quantité"],
-                    "valorisation": updated_val
+                    "quantité": row["quantité"]
                 }).eq("client_id", get_client_id(client_name)).eq("valeur", row["valeur"]).execute()
             st.success(f"Portfolio updated for '{client_name}'!")
             st.experimental_rerun()
@@ -188,15 +211,14 @@ def show_portfolio(client_name, read_only=False):
         # Add Stock/Cash
         add_stock = st.selectbox(f"Select Stock/Cash to Add ({client_name})", stocks["valeur"].tolist(), key=f"add_s_{client_name}")
         add_qty = st.number_input(f"Quantity for {client_name}", min_value=1, value=1, key=f"qty_s_{client_name}")
-        if st.button(f"➕ Add {add_stock} to {client_name}", key=f"add_btn_{client_name}"):
-            price = stocks.loc[stocks["valeur"] == add_stock, "cours"].values[0]
-            val = add_qty * price
+        if st.button(f"➕ Add {add_stock} to {client_name}", key=f"btn_add_{client_name}"):
+            # We'll store 'cours'/'valorisation' as placeholders; we always recalc from 'stocks'
             client.table("portfolios").insert({
                 "client_id": get_client_id(client_name),
                 "valeur": add_stock,
                 "quantité": add_qty,
-                "cours": price,
-                "valorisation": val
+                "cours": 0.0,
+                "valorisation": 0.0
             }).execute()
             st.success(f"Added {add_qty} of {add_stock}")
             st.experimental_rerun()
@@ -210,25 +232,48 @@ def show_portfolio(client_name, read_only=False):
 
 # ===================== Show All Portfolios =====================
 def show_all_portfolios():
+    """
+    For each client, we re-fetch their portfolio and dynamically compute
+    each row's cours & valorisation from 'stocks', then display read-only.
+    """
     clients = get_all_clients()
     if not clients:
         st.warning("No clients found.")
         return
+
     for cname in clients:
         st.write(f"### Client: {cname}")
-        show_portfolio(cname, read_only=True)
+        df = get_portfolio(cname)
+        if df.empty:
+            st.write("No portfolio found for this client.")
+            st.write("---")
+            continue
+
+        # Recompute using current 'stocks' data
+        for i, row in df.iterrows():
+            # find current price
+            matching_price = stocks.loc[stocks["valeur"] == row["valeur"]]
+            price = matching_price["cours"].values[0] if not matching_price.empty else 0.0
+            df.at[i, "cours"] = price
+            df.at[i, "valorisation"] = row["quantité"] * price
+
+        total_val = df["valorisation"].sum()
+        df["poids"] = ((df["valorisation"] / total_val) * 100).round(2) if total_val else 0
+
+        st.dataframe(df[["valeur", "quantité", "cours", "valorisation", "poids"]], use_container_width=True)
+        st.write(f"**Valorisation totale du portefeuille:** {total_val:.2f}")
         st.write("---")
 
 # ===================== Inventory Page =====================
 def show_inventory():
     """
     Displays a table with:
-    - valeur
-    - quantité total
-    - valorisation
-    - poids
-    - portefeuille
-    Then shows total assets under management (Actif sous gestion).
+      - valeur
+      - quantité total
+      - valorisation ( aggregated across all clients using the current 'stocks' data )
+      - poids ( fraction of total sum )
+      - portefeuille ( list of clients who hold it )
+    Then shows total assets under management.
     """
     clients = get_all_clients()
     if not clients:
@@ -236,75 +281,75 @@ def show_inventory():
         return
 
     master_data = defaultdict(lambda: {"quantity": 0, "clients": set()})
-    total_assets = 0.0
+    overall_portfolio_sum = 0.0
 
-    # Accumulate data from all clients
+    # Accumulate data from all clients' portfolios
     for c in clients:
         df = get_portfolio(c)
         if not df.empty:
-            # Add this client's total to AUM
-            total_val = df["valorisation"].sum()
-            total_assets += total_val
-
-            # Merge stock/cash
+            # We'll recalc using 'stocks'
+            # sum of this portfolio's dynamic valorisation
+            portfolio_val = 0.0
             for _, row in df.iterrows():
                 val = row["valeur"]
-                master_data[val]["quantity"] += row["quantité"]
+                qty = row["quantité"]
+                # find the up-to-date price
+                matching = stocks.loc[stocks["valeur"] == val]
+                price = matching["cours"].values[0] if not matching.empty else 0.0
+                val_agg = qty * price
+                portfolio_val += val_agg
+
+                # Merge quantity
+                master_data[val]["quantity"] += qty
                 master_data[val]["clients"].add(c)
+
+            overall_portfolio_sum += portfolio_val
 
     if not master_data:
         st.title("🗃️ Global Inventory")
         st.write("No stocks or cash found in any portfolio.")
         return
 
-    # Build the inventory table
-    inventory_rows = []
-    overall_val_sum = 0.0
-
+    # Build table
+    rows_data = []
+    sum_of_all_stocks_val = 0.0
     for val, info in master_data.items():
-        # find price from 'stocks'
-        found_row = stocks.loc[stocks["valeur"] == val]
-        if found_row.empty:
-            continue
-        price = found_row["cours"].values[0]
-        val_agg = info["quantity"] * price
-        overall_val_sum += val_agg
-
-        inventory_rows.append({
+        matching_price = stocks.loc[stocks["valeur"] == val]
+        price = matching_price["cours"].values[0] if not matching_price.empty else 0.0
+        agg_val = info["quantity"] * price
+        sum_of_all_stocks_val += agg_val
+        rows_data.append({
             "valeur": val,
             "quantité total": info["quantity"],
-            "valorisation": val_agg,
+            "valorisation": agg_val,
             "portefeuille": ", ".join(sorted(info["clients"]))
         })
 
-    # Calculate poids for each row
-    for row in inventory_rows:
-        if overall_val_sum > 0:
-            row["poids"] = round((row["valorisation"] / overall_val_sum) * 100, 2)
+    # Now compute poids
+    for row in rows_data:
+        if sum_of_all_stocks_val > 0:
+            row["poids"] = round(row["valorisation"] / sum_of_all_stocks_val * 100, 2)
         else:
             row["poids"] = 0.0
 
-    # Display the inventory
     st.title("🗃️ Global Inventory")
-    inv_df = pd.DataFrame(inventory_rows)
+    inv_df = pd.DataFrame(rows_data)
     st.dataframe(
         inv_df[["valeur", "quantité total", "valorisation", "poids", "portefeuille"]],
         use_container_width=True
     )
 
-    # Actif sous gestion
-    st.write(f"### Actif sous gestion: {total_assets:.2f}")
+    st.write(f"### Actif sous gestion: {overall_portfolio_sum:.2f}")
 
-# ===================== Market Page (New) =====================
+# ===================== Market Page =====================
 def show_market():
     """
     Displays the real-time stock/cash data from IDBourse API as a read-only table.
-    Refreshes automatically every minute due to `@st.cache_data(ttl=60)`
+    Refreshes automatically every minute (cached with ttl=60).
     """
     st.title("📈 Market")
     st.write("Below are the current stocks/cash with their real-time prices (refreshed every minute).")
     market_df = get_stock_list()
-    # Show read-only
     st.dataframe(market_df, use_container_width=True)
 
 # ===================== Pages =====================
@@ -316,7 +361,7 @@ page = st.sidebar.selectbox(
         "View Client Portfolio",
         "View All Portfolios",
         "Inventory",
-        "Market"  # New Page
+        "Market"
     ]
 )
 
@@ -373,5 +418,5 @@ elif page == "View All Portfolios":
 elif page == "Inventory":
     show_inventory()
 
-elif page == "Market":  # New Page
+elif page == "Market":
     show_market()
