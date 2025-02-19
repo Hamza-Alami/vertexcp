@@ -154,7 +154,7 @@ def show_portfolio(client_name, read_only=False):
     # Store 'poids' as a float for sorting
     df["poids"] = ((df["valorisation"] / total_value) * 100).round(2)
 
-    st.subheader(f"📜 Portfolio for {client_name}")
+    st.subheader(f" Portfolio for {client_name}")
     st.write(f"**Valorisation totale du portefeuille:** {total_value:.2f}")
 
     if read_only:
