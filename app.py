@@ -137,40 +137,50 @@ def new_portfolio_creation_ui(client_name):
                 del st.session_state.temp_holdings
 
 # ===================== Show Single Portfolio =====================
-def show_portfolio(client_name, key_prefix=""):
+def show_portfolio(client_name):
     df = get_portfolio(client_name)
     if df.empty:
         st.warning(f"No portfolio found for '{client_name}'")
         return
 
-    total_val = df["valorisation"].sum()
-    # Convert 'poids' to a numeric float for sorting
-    df["poids_float"] = (df["valorisation"] / total_val) * 100
-    df["poids"] = df["poids_float"].round(2)
+    total_value = df["valorisation"].sum()
 
-    st.subheader(f"📊 Portfolio for {client_name}")
+    # Store 'poids' as a float for sorting:
+    df["poids"] = (df["valorisation"] / total_value * 100).round(2)
 
-    # Data Editor (Poids as numeric so it sorts properly)
+    st.subheader(f"📜 Portfolio for {client_name}")
+
+    # Use st.data_editor with column_config so 'poids' is recognized as a numeric column:
     edited_df = st.data_editor(
         df[["valeur", "quantité", "valorisation", "poids"]],
         use_container_width=True,
-        key=f"pf_editor_{key_prefix}_{client_name}",
-        num_rows="dynamic"
+        column_config={
+            "poids": st.column_config.NumberColumn(
+                "Poids (%)",  # Label in the UI
+                format="%.2f",  # Show two decimals
+                step=0.01
+            ),
+            "valorisation": st.column_config.NumberColumn("Valorisation", format="%.2f"),
+            "quantité": st.column_config.NumberColumn("Quantité")
+        },
+        key=f"pf_editor_{client_name}"
     )
 
-    # Show total portfolio value
-    st.write(f"**Valorisation totale du portefeuille:** {total_val:.2f}")
+    # Display total portfolio value above the Save button:
+    total_val_msg = f"**Valorisation totale du portefeuille:** {total_value:.2f}"
+    st.write(total_val_msg)
 
-    # Save changes button
-    if st.button(f"💾 Save Portfolio Changes ({client_name})", key=f"save_{key_prefix}_{client_name}"):
+    # Save Button:
+    if st.button(f"💾 Save Portfolio Changes for {client_name}", key=f"save_btn_{client_name}"):
         for index, row in edited_df.iterrows():
+            # Recalculate valorisation based on 'quantité' * 'cours'
             stock_price = stocks.loc[stocks["valeur"] == row["valeur"], "cours"].values[0]
-            updated_val = row["quantité"] * stock_price
-            client.table("portfolios").update({
+            updated_valorisation = row["quantité"] * stock_price
+            client.table('portfolios').update({
                 "quantité": row["quantité"],
-                "valorisation": updated_val
+                "valorisation": updated_valorisation
             }).eq("client_id", get_client_id(client_name)).eq("valeur", row["valeur"]).execute()
-        st.success(f"Portfolio updated for '{client_name}'!")
+        st.success(f"Portfolio updated successfully for '{client_name}'!")
         st.experimental_rerun()
 
     # Add Stock/Cash
