@@ -96,12 +96,12 @@ def update_client_rates(client_name, exchange_comm, is_pea, custom_tax, mgmt_fee
     """Update the client's rates in DB, converting to float to avoid TypeError."""
     cid = get_client_id(client_name)
     if cid:
-        final_tax = 0.0 if is_pea else float(custom_tax)
+        final_tax = 0.0 if is_pea else round(float(custom_tax), 2)
         client.table("clients").update({
-            "exchange_commission_rate": float(exchange_comm),
+            "exchange_commission_rate": round(float(exchange_comm), 2),
             "tax_on_gains_rate": final_tax,
             "is_pea": is_pea,
-            "management_fee_rate": float(mgmt_fee)
+            "management_fee_rate": round(float(mgmt_fee), 2)
         }).eq("id", cid).execute()
         st.success(f"Updated rates for {client_name}")
         st.experimental_rerun()
@@ -128,8 +128,8 @@ def create_portfolio_rows(client_name, holdings):
         if qty > 0:
             rows.append({
                 "client_id": cid,
-                "valeur": stock,
-                "quantité": float(qty),
+                "valeur": str(stock),
+                "quantité": round(float(qty), 2),
                 "vwap": 0.0,
                 "cours": 0.0,
                 "valorisation": 0.0
@@ -148,10 +148,10 @@ def new_portfolio_creation_ui(client_name):
         st.session_state.temp_holdings = {}
 
     new_stock = st.selectbox(f"Select Stock/Cash for {client_name}", stocks["valeur"].tolist(), key=f"new_stock_{client_name}")
-    qty = st.number_input(f"Quantity for {client_name}", min_value=1, value=1, key=f"new_qty_{client_name}")
+    qty = st.number_input(f"Quantity for {client_name}", min_value=1.0, value=1.0, step=0.01, key=f"new_qty_{client_name}")
 
     if st.button(f"➕ Add {new_stock}", key=f"add_btn_{client_name}"):
-        st.session_state.temp_holdings[new_stock] = float(qty)
+        st.session_state.temp_holdings[new_stock] = round(qty, 2)
         st.success(f"Added {qty} of {new_stock}")
 
     if st.session_state.temp_holdings:
@@ -173,56 +173,55 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
         st.error("Client info not found.")
         return
 
-    exchange_rate = float(cinfo.get("exchange_commission_rate", 0.0))
+    exchange_rate = round(float(cinfo.get("exchange_commission_rate", 0.0)), 2)
+
+    raw_cost = round(float(transaction_price) * float(quantity), 2)
+    commission_cost = round(raw_cost * (exchange_rate / 100.0), 2)
+    total_cost = round(raw_cost + commission_cost, 2)
+
     df = get_portfolio(client_name)
-
-    raw_cost = float(transaction_price) * float(quantity)
-    commission_cost = raw_cost * (exchange_rate / 100.0)
-    total_cost = raw_cost + commission_cost
-
     match = df[df["valeur"] == stock_name]
     if match.empty:
         # new row
-        new_vwap = float(transaction_price)
+        new_vwap = round(float(transaction_price), 2)
         client.table("portfolios").insert({
             "client_id": get_client_id(client_name),
             "valeur": str(stock_name),
-            "quantité": float(quantity),
-            "vwap": float(new_vwap),
+            "quantité": round(float(quantity), 2),
+            "vwap": new_vwap,
             "cours": 0.0,
             "valorisation": 0.0
         }).execute()
     else:
-        # recalc VWAP
-        old_qty = float(match["quantité"].values[0])
-        old_vwap = float(match["vwap"].values[0])
-        old_cost_total = old_qty * old_vwap
-        new_cost_total = old_cost_total + total_cost
-        new_qty = old_qty + float(quantity)
-        new_vwap = new_cost_total / new_qty if new_qty else 0.0
+        old_qty = round(float(match["quantité"].values[0]), 2)
+        old_vwap = round(float(match["vwap"].values[0]), 2)
+        old_cost_total = round(old_qty * old_vwap, 2)
+        new_cost_total = round(old_cost_total + total_cost, 2)
+        new_qty = round(old_qty + float(quantity), 2)
+        new_vwap = round((new_cost_total / new_qty), 4) if new_qty else 0.0
 
         client.table("portfolios").update({
-            "quantité": float(new_qty),
-            "vwap": float(new_vwap)
+            "quantité": new_qty,
+            "vwap": new_vwap
         }).eq("client_id", get_client_id(client_name)).eq("valeur", str(stock_name)).execute()
 
-    # update "Cash" (always vwap=1)
+    # update "Cash"
     cash_row = df[df["valeur"] == "Cash"]
     if cash_row.empty:
         client.table("portfolios").insert({
             "client_id": get_client_id(client_name),
             "valeur": "Cash",
-            "quantité": -float(total_cost),
+            "quantité": -total_cost,
             "vwap": 1.0,
             "cours": 0.0,
             "valorisation": 0.0
         }).execute()
     else:
-        old_cash_qty = float(cash_row["quantité"].values[0])
-        new_cash_qty = old_cash_qty - float(total_cost)
+        old_cash_qty = round(float(cash_row["quantité"].values[0]), 2)
+        new_cash_qty = round(old_cash_qty - total_cost, 2)
         client.table("portfolios").update({
-            "quantité": float(new_cash_qty),
-            "vwap": 1.0  # always ensure vwap=1 for Cash
+            "quantité": new_cash_qty,
+            "vwap": 1.0
         }).eq("client_id", get_client_id(client_name)).eq("valeur", "Cash").execute()
 
     st.success(f"Bought {quantity} of {stock_name} at {transaction_price:.2f}, total cost {total_cost:.2f}")
@@ -232,15 +231,15 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
 def sell_shares(client_name, stock_name, transaction_price, quantity):
     """
     Sell up to existing quantity. If there's net profit, apply tax_on_gains_rate. Always apply commission.
-    Add net proceed to "Cash" (vwap=1).
+    Add net proceed to "Cash".
     """
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Client info not found.")
         return
 
-    exchange_rate = float(cinfo.get("exchange_commission_rate", 0.0))
-    tax_rate = float(cinfo.get("tax_on_gains_rate", 15.0))
+    exchange_rate = round(float(cinfo.get("exchange_commission_rate", 0.0)), 2)
+    tax_rate = round(float(cinfo.get("tax_on_gains_rate", 15.0)), 2)
 
     df = get_portfolio(client_name)
     match = df[df["valeur"] == stock_name]
@@ -248,30 +247,31 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
         st.error(f"Client does not hold {stock_name}.")
         return
 
-    old_qty = float(match["quantité"].values[0])
+    old_qty = round(float(match["quantité"].values[0]), 2)
     if float(quantity) > old_qty:
         st.error(f"Cannot sell {quantity}. Only {old_qty} available.")
         return
 
-    old_vwap = float(match["vwap"].values[0])
+    old_vwap = round(float(match["vwap"].values[0]), 4)
 
-    raw_proceeds = float(transaction_price) * float(quantity)
-    commission = raw_proceeds * (exchange_rate / 100.0)
-    net_proceeds = raw_proceeds - commission
+    raw_proceeds = round(float(transaction_price) * float(quantity), 2)
+    commission = round(raw_proceeds * (exchange_rate / 100.0), 2)
+    net_proceeds = round(raw_proceeds - commission, 2)
 
-    cost_of_shares = float(quantity) * old_vwap
-    potential_profit = net_proceeds - cost_of_shares
+    cost_of_shares = round(float(quantity) * old_vwap, 2)
+    potential_profit = round(net_proceeds - cost_of_shares, 2)
 
     if potential_profit > 0:
-        tax = potential_profit * (tax_rate / 100.0)
-        net_proceeds -= tax
+        tax = round(potential_profit * (tax_rate / 100.0), 2)
+        net_proceeds = round(net_proceeds - tax, 2)
 
-    new_qty = old_qty - float(quantity)
-    if new_qty <= 0:
+    new_qty = round(old_qty - float(quantity), 2)
+    if new_qty <= 0.0:
+        # remove row
         client.table("portfolios").delete().eq("client_id", get_client_id(client_name)).eq("valeur", str(stock_name)).execute()
     else:
         client.table("portfolios").update({
-            "quantité": float(new_qty)
+            "quantité": new_qty
         }).eq("client_id", get_client_id(client_name)).eq("valeur", str(stock_name)).execute()
 
     # update Cash
@@ -280,16 +280,16 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
         client.table("portfolios").insert({
             "client_id": get_client_id(client_name),
             "valeur": "Cash",
-            "quantité": float(net_proceeds),
+            "quantité": net_proceeds,
             "vwap": 1.0,
             "cours": 0.0,
             "valorisation": 0.0
         }).execute()
     else:
-        old_cash_qty = float(cash_row["quantité"].values[0])
-        new_cash_qty = old_cash_qty + float(net_proceeds)
+        old_cash_qty = round(float(cash_row["quantité"].values[0]), 2)
+        new_cash_qty = round(old_cash_qty + net_proceeds, 2)
         client.table("portfolios").update({
-            "quantité": float(new_cash_qty),
+            "quantité": new_cash_qty,
             "vwap": 1.0
         }).eq("client_id", get_client_id(client_name)).eq("valeur", "Cash").execute()
 
@@ -307,15 +307,14 @@ def show_portfolio(client_name, read_only=False):
     for i, row in df.iterrows():
         valn = str(row["valeur"])
         match = stocks[stocks["valeur"] == valn]
-        live_price = float(match["cours"].values[0]) if not match.empty else 0.0
+        live_price = round(float(match["cours"].values[0]), 2) if not match.empty else 0.0
         df.at[i, "cours"] = live_price
-        # valorisation = quantity * cours
-        quant = float(row["quantité"])
-        vwap_ = float(row.get("vwap", 0.0))
-        df.at[i, "valorisation"] = quant * live_price
-        cost_tot = quant * vwap_
+        quant = round(float(row["quantité"]), 2)
+        vwap_ = round(float(row.get("vwap", 0.0)), 4)
+        df.at[i, "valorisation"] = round(quant * live_price, 2)
+        cost_tot = round(quant * vwap_, 2)
         df.at[i, "cost_total"] = cost_tot
-        df.at[i, "performance_latente"] = (quant * live_price) - cost_tot
+        df.at[i, "performance_latente"] = round(df.at[i, "valorisation"] - cost_tot, 2)
 
     total_value = df["valorisation"].sum()
     if total_value > 0:
@@ -343,55 +342,60 @@ def show_portfolio(client_name, read_only=False):
         else:
             st.write("Client info not found to set rates.")
 
-    # Data styling for performance_latente
-    # We'll style in a separate st.dataframe() because st.data_editor doesn't currently support applymap styling
+    # We'll show a separate styled display for performance color
     df_display = df[["valeur","quantité","vwap","cours","cost_total","valorisation","performance_latente","poids"]].copy()
 
-    def highlight_perf(val):
+    def color_perf(val):
         if val > 0:
-            return "color:green;"
+            return "color: green;"
         elif val < 0:
-            return "color:red;"
+            return "color: red;"
         return ""
 
-    df_styled = df_display.style.applymap(highlight_perf, subset=["performance_latente"])
+    # style
+    df_styled = df_display.style.format(
+        subset=["vwap","cours","cost_total","valorisation","performance_latente","poids"],
+        formatter="{:.2f}"
+    ).applymap(color_perf, subset=["performance_latente"])
 
     if read_only:
         st.dataframe(df_styled, use_container_width=True)
     else:
-        # We still do st.dataframe for the style
-        st.write("#### Current Holdings (edit below if needed)")        
+        st.write("#### Current Holdings")
         st.dataframe(df_styled, use_container_width=True)
 
-        # data_editor only for the columns that can be edited: quantity, vwap
-        editable_cols = ["valeur","quantité","vwap"]
-        ed_df = df[editable_cols].copy()
+        with st.expander("Manual Edits (Quantity / VWAP)", expanded=False):
+            # data_editor only for the columns that can be edited: quantity, vwap
+            editable_cols = ["valeur","quantité","vwap"]
+            ed_df = df[editable_cols].copy()
 
-        st.write("#### Edit (Quantity / VWAP) if you made a mistake")
-        updated_df = st.data_editor(
-            ed_df,
-            use_container_width=True,
-            key=f"portfolio_editor_{client_name}"
-        )
+            updated_df = st.data_editor(
+                ed_df,
+                use_container_width=True,
+                key=f"portfolio_editor_{client_name}",
+                column_config={
+                    "quantité": st.column_config.NumberColumn("Quantité", format="%.2f", step=0.01),
+                    "vwap": st.column_config.NumberColumn("VWAP", format="%.4f", step=0.001)
+                }
+            )
 
-        if st.button(f"💾 Save Edits for {client_name}", key=f"save_portfolio_edits_{client_name}"):
-            # update DB
-            for idx, row in updated_df.iterrows():
-                valn = str(row["valeur"])
-                qn = float(row["quantité"])
-                vw = float(row["vwap"])
-                client.table("portfolios").update({
-                    "quantité": qn,
-                    "vwap": vw
-                }).eq("client_id", get_client_id(client_name)).eq("valeur", valn).execute()
-            st.success(f"Portfolio updated for '{client_name}'!")
-            st.experimental_rerun()
+            if st.button(f"💾 Save Edits (Quantity / VWAP) for {client_name}", key=f"save_portfolio_edits_{client_name}"):
+                for idx, row in updated_df.iterrows():
+                    valn = str(row["valeur"])
+                    qn = round(float(row["quantité"]), 2)
+                    vw = round(float(row["vwap"]), 4)
+                    client.table("portfolios").update({
+                        "quantité": qn,
+                        "vwap": vw
+                    }).eq("client_id", get_client_id(client_name)).eq("valeur", valn).execute()
+                st.success(f"Portfolio updated for '{client_name}'!")
+                st.experimental_rerun()
 
         # Buy
         st.write("### Buy Transaction")
         buy_stock = st.selectbox(f"Stock to BUY for {client_name}", stocks["valeur"].tolist(), key=f"buy_s_{client_name}")
         buy_price = st.number_input(f"Buy Price for {buy_stock}", min_value=0.0, value=0.0, step=0.01, key=f"buy_price_{client_name}")
-        buy_qty = st.number_input(f"Buy Quantity for {buy_stock}", min_value=1, value=1, key=f"buy_qty_{client_name}")
+        buy_qty = st.number_input(f"Buy Quantity for {buy_stock}", min_value=1.0, value=1.0, step=0.01, key=f"buy_qty_{client_name}")
         if st.button(f"BUY {buy_stock}", key=f"buy_btn_{client_name}"):
             buy_shares(client_name, buy_stock, buy_price, buy_qty)
 
@@ -400,7 +404,7 @@ def show_portfolio(client_name, read_only=False):
         existing_stocks = df[df["valeur"] != "Cash"]["valeur"].unique().tolist()
         sell_stock = st.selectbox(f"Stock to SELL for {client_name}", existing_stocks, key=f"sell_s_{client_name}")
         sell_price = st.number_input(f"Sell Price for {sell_stock}", min_value=0.0, value=0.0, step=0.01, key=f"sell_price_{client_name}")
-        sell_qty = st.number_input(f"Sell Quantity for {sell_stock}", min_value=1, value=1, key=f"sell_qty_{client_name}")
+        sell_qty = st.number_input(f"Sell Quantity for {sell_stock}", min_value=1.0, value=1.0, step=0.01, key=f"sell_qty_{client_name}")
         if st.button(f"SELL {sell_stock}", key=f"sell_btn_{client_name}"):
             sell_shares(client_name, sell_stock, sell_price, sell_qty)
 
@@ -431,11 +435,10 @@ def show_inventory():
             portfolio_val = 0.0
             for _, row in df.iterrows():
                 val = str(row["valeur"])
-                qty = float(row["quantité"])
-                # find current price
+                qty = round(float(row["quantité"]),2)
                 match = stocks[stocks["valeur"] == val]
-                price = float(match["cours"].values[0]) if not match.empty else 0.0
-                val_agg = qty * price
+                price = round(float(match["cours"].values[0]),2) if not match.empty else 0.0
+                val_agg = round(qty * price,2)
                 portfolio_val += val_agg
                 master_data[val]["quantity"] += qty
                 master_data[val]["clients"].add(c)
@@ -451,8 +454,8 @@ def show_inventory():
 
     for val, info in master_data.items():
         match = stocks[stocks["valeur"] == val]
-        price = float(match["cours"].values[0]) if not match.empty else 0.0
-        agg_val = info["quantity"] * price
+        price = round(float(match["cours"].values[0]),2) if not match.empty else 0.0
+        agg_val = round(info["quantity"] * price,2)
         sum_of_all_stocks_val += agg_val
         rows_data.append({
             "valeur": val,
@@ -479,11 +482,11 @@ def show_inventory():
 # ===================== Market Page =====================
 def show_market():
     """
-    Displays the real-time stock/cash data from IDBourse API as a read-only table.
-    Refreshes automatically every minute (cached with ttl=60).
+    Displays real-time stock/cash data from IDBourse API as read-only.
+    Refreshes every minute.
     """
     st.title("📈 Market")
-    st.write("Below are the current stocks/cash with their real-time prices (refreshed every minute).")
+    st.write("Below are the current stocks/cash with real-time prices (refreshed every minute).")
     market_df = get_stock_list()
     st.dataframe(market_df, use_container_width=True)
 
