@@ -9,8 +9,8 @@ supabase_url = st.secrets["supabase"]["url"]
 supabase_key = st.secrets["supabase"]["key"]
 client = create_client(supabase_url, supabase_key)
 
-# ===================== Fetch Stock Data ========================
-@st.cache_data
+# ===================== Fetch Stock Data (With Auto-Refresh) =====================
+@st.cache_data(ttl=60)  # Cache expires every 60 seconds
 def get_stock_list():
     try:
         response = requests.get("https://backend.idbourse.com/api_2/get_all_data", timeout=10)
@@ -225,10 +225,10 @@ def show_inventory():
     Displays a table with:
     - valeur
     - quantité total
-    - valorisation ( = summed quantity * stock price )
-    - poids ( valorisation / sum_of_all_valorisation * 100 )
-    - portefeuille ( list of clients who hold that stock )
-    Then shows total assets under management.
+    - valorisation
+    - poids
+    - portefeuille
+    Then shows total assets under management (Actif sous gestion).
     """
     clients = get_all_clients()
     if not clients:
@@ -238,7 +238,7 @@ def show_inventory():
     master_data = defaultdict(lambda: {"quantity": 0, "clients": set()})
     total_assets = 0.0
 
-    # 1) Accumulate data from all portfolios
+    # Accumulate data from all clients
     for c in clients:
         df = get_portfolio(c)
         if not df.empty:
@@ -246,11 +246,10 @@ def show_inventory():
             total_val = df["valorisation"].sum()
             total_assets += total_val
 
-            # Merge stock/cash quantities
+            # Merge stock/cash
             for _, row in df.iterrows():
                 val = row["valeur"]
-                qty = row["quantité"]
-                master_data[val]["quantity"] += qty
+                master_data[val]["quantity"] += row["quantité"]
                 master_data[val]["clients"].add(c)
 
     if not master_data:
@@ -258,20 +257,16 @@ def show_inventory():
         st.write("No stocks or cash found in any portfolio.")
         return
 
-    # 2) Build table
+    # Build the inventory table
     inventory_rows = []
-    # We'll want to compute total valorisation for each stock
-    # using the latest price from 'stocks'
     overall_val_sum = 0.0
 
     for val, info in master_data.items():
         # find price from 'stocks'
-        price_row = stocks.loc[stocks["valeur"] == val]
-        if price_row.empty:
-            # fallback or skip if not found
+        found_row = stocks.loc[stocks["valeur"] == val]
+        if found_row.empty:
             continue
-        price = price_row["cours"].values[0]
-        # compute aggregated valorisation
+        price = found_row["cours"].values[0]
         val_agg = info["quantity"] * price
         overall_val_sum += val_agg
 
@@ -282,25 +277,35 @@ def show_inventory():
             "portefeuille": ", ".join(sorted(info["clients"]))
         })
 
-    # 3) Now compute poids for each row
-    #    so that we can show the fraction
+    # Calculate poids for each row
     for row in inventory_rows:
         if overall_val_sum > 0:
             row["poids"] = round((row["valorisation"] / overall_val_sum) * 100, 2)
         else:
             row["poids"] = 0.0
 
-    # 4) Display table
+    # Display the inventory
     st.title("🗃️ Global Inventory")
     inv_df = pd.DataFrame(inventory_rows)
-    # Use numeric columns so they are sortable
     st.dataframe(
         inv_df[["valeur", "quantité total", "valorisation", "poids", "portefeuille"]],
         use_container_width=True
     )
 
-    # 5) Show total assets under management
+    # Actif sous gestion
     st.write(f"### Actif sous gestion: {total_assets:.2f}")
+
+# ===================== Market Page (New) =====================
+def show_market():
+    """
+    Displays the real-time stock/cash data from IDBourse API as a read-only table.
+    Refreshes automatically every minute due to `@st.cache_data(ttl=60)`
+    """
+    st.title("📈 Market")
+    st.write("Below are the current stocks/cash with their real-time prices (refreshed every minute).")
+    market_df = get_stock_list()
+    # Show read-only
+    st.dataframe(market_df, use_container_width=True)
 
 # ===================== Pages =====================
 page = st.sidebar.selectbox(
@@ -310,7 +315,8 @@ page = st.sidebar.selectbox(
         "Create Portfolio",
         "View Client Portfolio",
         "View All Portfolios",
-        "Inventory"
+        "Inventory",
+        "Market"  # New Page
     ]
 )
 
@@ -366,3 +372,6 @@ elif page == "View All Portfolios":
 
 elif page == "Inventory":
     show_inventory()
+
+elif page == "Market":  # New Page
+    show_market()
