@@ -13,8 +13,8 @@ client = create_client(supabase_url, supabase_key)
 @st.cache_data(ttl=60)
 def get_stock_list():
     """
-    Fetch the latest stock/cash prices from IDBourse.
-    Caches for 60 seconds, so it's up to date each minute.
+    Fetch the latest stock/cash prices from IDBourse API, 
+    and add 'Cash' with cours=1. 
     """
     try:
         response = requests.get("https://backend.idbourse.com/api_2/get_all_data", timeout=10)
@@ -24,7 +24,7 @@ def get_stock_list():
             [(s.get("name", "N/A"), s.get("dernier_cours", 0)) for s in data],
             columns=["valeur", "cours"]
         )
-        # Add Cash as a stock with a price of 1
+        # Add Cash
         cash_row = pd.DataFrame([{"valeur": "Cash", "cours": 1}])
         return pd.concat([df, cash_row], ignore_index=True)
     except Exception as e:
@@ -33,14 +33,21 @@ def get_stock_list():
 
 stocks = get_stock_list()
 
-# ===================== Helper Functions ========================
+# ===================== Helpers =====================
 def get_all_clients():
     res = client.table("clients").select("*").execute()
     return [r["name"] for r in res.data] if res.data else []
 
+def get_client_info(client_name):
+    """Return the entire row from 'clients' for the chosen client, including commission & tax rates."""
+    res = client.table("clients").select("*").eq("name", client_name).execute()
+    if res.data:
+        return res.data[0]
+    return None
+
 def get_client_id(client_name):
-    res = client.table("clients").select("id").eq("name", client_name).execute()
-    return res.data[0]["id"] if res.data else None
+    cinfo = get_client_info(client_name)
+    return cinfo["id"] if cinfo else None
 
 def client_has_portfolio(client_name):
     cid = get_client_id(client_name)
@@ -49,13 +56,22 @@ def client_has_portfolio(client_name):
     port = client.table("portfolios").select("*").eq("client_id", cid).execute()
     return len(port.data) > 0
 
-# ===================== Client Management =======================
+def get_portfolio(client_name):
+    cid = get_client_id(client_name)
+    if not cid:
+        return pd.DataFrame()
+    res = client.table("portfolios").select("*").eq("client_id", cid).execute()
+    return pd.DataFrame(res.data)
+
+# ===================== Client Management =====================
 def create_client(name):
     if not name:
         st.error("Client name cannot be empty.")
         return
     try:
-        client.table("clients").insert({"name": name}).execute()
+        client.table("clients").insert({
+            "name": name
+        }).execute()
         st.success(f"Client '{name}' added!")
         st.experimental_rerun()
     except Exception as e:
@@ -79,32 +95,46 @@ def delete_client(cname):
     else:
         st.error("Client not found.")
 
-# ===================== Portfolio Management =====================
+def update_client_rates(client_name, exchange_comm_rate, is_pea, custom_tax_rate, mgmt_fee):
+    """Update client's exchange commission, tax_on_gains_rate, mgmt_fee_rate, etc."""
+    cid = get_client_id(client_name)
+    if cid:
+        # Determine final tax rate: if is_pea, then 0, else custom_tax_rate
+        final_tax = 0.0 if is_pea else custom_tax_rate
+        client.table("clients").update({
+            "exchange_commission_rate": exchange_comm_rate,
+            "tax_on_gains_rate": final_tax,
+            "is_pea": is_pea,
+            "management_fee_rate": mgmt_fee
+        }).eq("id", cid).execute()
+        st.success(f"Updated rates for {client_name}")
+        st.experimental_rerun()
+    else:
+        st.error("Client not found to update rates.")
+
+# ===================== Portfolio Creation & Storage =====================
 def create_portfolio_rows(client_name, holdings):
-    """
-    Actually create the portfolio rows for multiple stocks/cash.
-    We store 'quantité' in DB, but we'll recompute 'cours' & 'valorisation' dynamically later.
-    """
     cid = get_client_id(client_name)
     if not cid:
         st.error("Client not found.")
         return
 
     if client_has_portfolio(client_name):
-        st.warning(f"Client '{client_name}' already has a portfolio. Go to 'View Client Portfolio' to edit it.")
+        st.warning(f"Client '{client_name}' already has a portfolio. Go to 'View Client Portfolio' to edit.")
         return
 
     rows = []
     for stock, qty in holdings.items():
         if qty > 0:
-            # We won't rely on old stored cours/valorisation in the DB
-            # We'll store them as 0 or placeholders
             rows.append({
                 "client_id": cid,
                 "valeur": stock,
                 "quantité": qty,
-                "cours": 0.0,           # placeholder
-                "valorisation": 0.0     # placeholder
+                # We'll store vwap, but user can manually set or edit it later
+                "vwap": 0.0,
+                # We'll store cours/valorisation as placeholders. We'll recalc on the fly
+                "cours": 0.0,
+                "valorisation": 0.0
             })
     if rows:
         client.table("portfolios").upsert(rows).execute()
@@ -113,19 +143,8 @@ def create_portfolio_rows(client_name, holdings):
     else:
         st.warning("No stocks or cash provided for portfolio creation.")
 
-def get_portfolio(client_name):
-    cid = get_client_id(client_name)
-    if not cid:
-        return pd.DataFrame()
-    res = client.table("portfolios").select("*").eq("client_id", cid).execute()
-    return pd.DataFrame(res.data)
-
 # ===================== Create Portfolio UI =====================
 def new_portfolio_creation_ui(client_name):
-    """
-    Lets user add multiple stocks/cash before final creation.
-    We'll store only 'quantité' in DB for each stock. 'cours' & 'valorisation' are placeholders.
-    """
     st.subheader(f"➕ Add Initial Holdings for {client_name}")
     if "temp_holdings" not in st.session_state:
         st.session_state.temp_holdings = {}
@@ -146,96 +165,254 @@ def new_portfolio_creation_ui(client_name):
 
         if st.button(f"💾 Create Portfolio for {client_name}", key=f"create_pf_btn_{client_name}"):
             create_portfolio_rows(client_name, st.session_state.temp_holdings)
-            if "temp_holdings" in st.session_state:
-                del st.session_state.temp_holdings
+            del st.session_state.temp_holdings
+
+# ===================== "BUY" Transaction Helper =====================
+def buy_shares(client_name, stock_name, transaction_price, quantity):
+    """
+    * Recompute cost = (transaction_price * quantity) + (exchange_commission_rate * cost)
+    * If stock doesn't exist in portfolio, add it with new vwap
+    * If exists, recalc new VWAP
+    * Subtract cost from "Cash"
+    """
+    cinfo = get_client_info(client_name)
+    if not cinfo:
+        st.error("Client info not found.")
+        return
+
+    exchange_rate = cinfo.get("exchange_commission_rate", 0.0) or 0.0
+
+    df = get_portfolio(client_name)
+    # cost before commission
+    raw_cost = transaction_price * quantity
+    # add commission
+    commission_cost = raw_cost * (exchange_rate / 100.0)
+    total_cost = raw_cost + commission_cost
+
+    # find existing row for the stock
+    match = df[df["valeur"] == stock_name]
+    if match.empty:
+        # new stock position
+        new_vwap = transaction_price  # user can override in the data editor
+        # insert row
+        client.table("portfolios").insert({
+            "client_id": get_client_id(client_name),
+            "valeur": stock_name,
+            "quantité": quantity,
+            "vwap": new_vwap,
+            "cours": 0.0,
+            "valorisation": 0.0
+        }).execute()
+    else:
+        # recalc VWAP
+        old_qty = match["quantité"].values[0]
+        old_vwap = match["vwap"].values[0]
+        old_cost_total = old_qty * old_vwap
+        new_cost_total = old_cost_total + total_cost
+        new_qty = old_qty + quantity
+        new_vwap = new_cost_total / new_qty
+
+        # update DB with new quantity & new vwap
+        client.table("portfolios").update({
+            "quantité": new_qty,
+            "vwap": new_vwap
+        }).eq("client_id", get_client_id(client_name)).eq("valeur", stock_name).execute()
+
+    # Subtract from "Cash"
+    # If "Cash" doesn't exist, create it
+    cash_row = df[df["valeur"] == "Cash"]
+    if cash_row.empty:
+        # create with negative quantity as placeholders?
+        client.table("portfolios").insert({
+            "client_id": get_client_id(client_name),
+            "valeur": "Cash",
+            "quantité": -total_cost,  # negative indicates we used that much
+            "vwap": 1.0
+        }).execute()
+    else:
+        old_cash_qty = cash_row["quantité"].values[0]
+        new_cash_qty = old_cash_qty - total_cost
+        client.table("portfolios").update({
+            "quantité": new_cash_qty
+        }).eq("client_id", get_client_id(client_name)).eq("valeur", "Cash").execute()
+
+    st.success(f"Bought {quantity} of {stock_name} at {transaction_price:.2f} + comm => total {total_cost:.2f}")
+    st.experimental_rerun()
+
+# ===================== "SELL" Transaction Helper =====================
+def sell_shares(client_name, stock_name, transaction_price, quantity):
+    """
+    * If user holds that stock in portfolio with vwap, 
+      net proceed = (transaction_price * quantity) - commission - taxesIfProfit
+    * Commission = exchange_comm_rate * proceed
+    * If net profit, tax it at tax_on_gains_rate
+    * Update stock quantity & possibly remove if zero
+    * Add net proceed to "Cash"
+    """
+    cinfo = get_client_info(client_name)
+    if not cinfo:
+        st.error("Client info not found.")
+        return
+
+    exchange_rate = cinfo.get("exchange_commission_rate", 0.0) or 0.0
+    tax_rate = cinfo.get("tax_on_gains_rate", 15.0) or 15.0  # or 0 if is_pea
+
+    df = get_portfolio(client_name)
+    match = df[df["valeur"] == stock_name]
+    if match.empty:
+        st.error(f"Client does not hold {stock_name}. Can't sell.")
+        return
+
+    old_qty = match["quantité"].values[0]
+    if quantity > old_qty:
+        st.error(f"Cannot sell {quantity} shares. Only hold {old_qty}.")
+        return
+
+    old_vwap = match["vwap"].values[0]
+    cost_total = old_vwap * old_qty  # total cost at old vwap
+    # but we only sell part => cost portion = quantity * vwap ?
+
+    # transaction proceeds before commission
+    raw_proceeds = transaction_price * quantity
+    # commission
+    commission = raw_proceeds * (exchange_rate / 100.0)
+    net_proceeds = raw_proceeds - commission
+
+    # see if we have a net profit vs cost portion
+    # cost portion for the shares being sold = quantity * old_vwap
+    cost_of_those_shares = quantity * old_vwap
+    potential_profit = net_proceeds - cost_of_those_shares
+
+    if potential_profit > 0:
+        # apply tax
+        tax = potential_profit * (tax_rate / 100.0)
+        net_proceeds_after_tax = net_proceeds - tax
+        net_proceeds = net_proceeds_after_tax
+    # if negative or zero, no tax
+
+    # update the quantity of that stock
+    new_qty = old_qty - quantity
+    if new_qty == 0:
+        # remove the row
+        client.table("portfolios").delete().eq("client_id", get_client_id(client_name)).eq("valeur", stock_name).execute()
+    else:
+        # update quantity, vwap remains the same for the leftover shares
+        client.table("portfolios").update({
+            "quantité": new_qty
+        }).eq("client_id", get_client_id(client_name)).eq("valeur", stock_name).execute()
+
+    # add net proceeds to "Cash"
+    cash_row = df[df["valeur"] == "Cash"]
+    if cash_row.empty:
+        # create row with the net proceeds
+        client.table("portfolios").insert({
+            "client_id": get_client_id(client_name),
+            "valeur": "Cash",
+            "quantité": net_proceeds,
+            "vwap": 1.0
+        }).execute()
+    else:
+        old_cash_qty = cash_row["quantité"].values[0]
+        new_cash_qty = old_cash_qty + net_proceeds
+        client.table("portfolios").update({
+            "quantité": new_cash_qty
+        }).eq("client_id", get_client_id(client_name)).eq("valeur", "Cash").execute()
+
+    st.success(f"Sold {quantity} of {stock_name} at {transaction_price:.2f}. Net proceeds {net_proceeds:.2f}.")
+    st.experimental_rerun()
 
 # ===================== Show Single Portfolio =====================
 def show_portfolio(client_name, read_only=False):
     """
-    Display or edit a single portfolio.
-    We dynamically compute 'cours' and 'valorisation' from the fresh 'stocks' data each time.
-    If read_only=True, we show a read-only table.
+    Display or edit a single portfolio. Now includes VWAP, cost_total, plus-value latente columns, 
+    and 'Buy'/'Sell' buttons if not read_only.
     """
     df = get_portfolio(client_name)
     if df.empty:
         st.warning(f"No portfolio found for '{client_name}'")
         return
 
-    # Recompute 'cours' & 'valorisation' for each row using the current 'stocks' data
+    # Recompute current "cours" from 'stocks' so user sees live prices
     for i, row in df.iterrows():
-        current_price_row = stocks.loc[stocks["valeur"] == row["valeur"]]
-        if not current_price_row.empty:
-            live_price = current_price_row["cours"].values[0]
-        else:
-            # fallback if not found
-            live_price = 0.0
+        match = stocks[stocks["valeur"] == row["valeur"]]
+        live_price = match["cours"].values[0] if not match.empty else 0.0
         df.at[i, "cours"] = live_price
+        # 'valorisation' = quantity * cours
         df.at[i, "valorisation"] = row["quantité"] * live_price
+        # cost_total = quantity * vwap
+        cost_total = row["quantité"] * row.get("vwap", 0.0)
+        df.at[i, "cost_total"] = cost_total
+        # plus-value latente = valorisation - cost_total
+        plusv = (row["quantité"] * live_price) - cost_total
+        df.at[i, "plus_value_latente"] = plusv
 
     total_value = df["valorisation"].sum()
-
-    # Store 'poids' as numeric float
+    # 'poids' as numeric
     df["poids"] = ((df["valorisation"] / total_value) * 100).round(2) if total_value else 0
 
     st.subheader(f"📜 Portfolio for {client_name}")
     st.write(f"**Valorisation totale du portefeuille:** {total_value:.2f}")
 
+    # Add columns for colorizing plus_value_latente
+    def color_pl(val):
+        """Return style color for plus-value latente."""
+        if val > 0:
+            return "color: green;"
+        elif val < 0:
+            return "color: red;"
+        else:
+            return ""
+
     if read_only:
-        # Read-only
-        st.dataframe(df[["valeur", "quantité", "cours", "valorisation", "poids"]], use_container_width=True)
+        # read-only display
+        st.dataframe(df[["valeur", "quantité", "vwap", "cours", "cost_total", "valorisation", "plus_value_latente", "poids"]], use_container_width=True)
     else:
-        # data_editor for editing quantity
+        # editable data editor
         edited_df = st.data_editor(
-            df[["valeur", "quantité", "cours", "valorisation", "poids"]],
+            df[["valeur", "quantité", "vwap", "cours", "cost_total", "valorisation", "plus_value_latente", "poids"]],
             use_container_width=True,
             column_config={
                 "poids": st.column_config.NumberColumn("Poids (%)", format="%.2f", step=0.01),
                 "valorisation": st.column_config.NumberColumn("Valorisation", format="%.2f"),
                 "cours": st.column_config.NumberColumn("Cours", format="%.2f"),
-                "quantité": st.column_config.NumberColumn("Quantité")
+                "vwap": st.column_config.NumberColumn("VWAP", format="%.2f"),
+                "cost_total": st.column_config.NumberColumn("Coût Total", format="%.2f"),
+                "plus_value_latente": st.column_config.NumberColumn("Plus-Value Latente", format="%.2f")
             },
             key=f"pf_editor_{client_name}"
         )
-
-        # Save changes
-        if st.button(f"💾 Save Portfolio Changes ({client_name})", key=f"save_btn_{client_name}"):
-            # Only 'quantité' is stored in DB. 'cours' & 'valorisation' are always recalculated.
+        # "Save" the changes to the DB (for 'quantity', 'vwap') 
+        # We'll recalc cost_total, plus_value latente, etc on the next refresh
+        if st.button(f"💾 Save Portfolio Changes for {client_name}", key=f"save_btn_{client_name}"):
             for index, row in edited_df.iterrows():
-                # Update the DB with the new 'quantité' only
+                # update 'quantity', 'vwap' in DB
                 client.table("portfolios").update({
-                    "quantité": row["quantité"]
+                    "quantité": row["quantité"],
+                    "vwap": row["vwap"]
                 }).eq("client_id", get_client_id(client_name)).eq("valeur", row["valeur"]).execute()
             st.success(f"Portfolio updated for '{client_name}'!")
             st.experimental_rerun()
 
-        # Add Stock/Cash
-        add_stock = st.selectbox(f"Select Stock/Cash to Add ({client_name})", stocks["valeur"].tolist(), key=f"add_s_{client_name}")
-        add_qty = st.number_input(f"Quantity for {client_name}", min_value=1, value=1, key=f"qty_s_{client_name}")
-        if st.button(f"➕ Add {add_stock} to {client_name}", key=f"btn_add_{client_name}"):
-            # We'll store 'cours'/'valorisation' as placeholders; we always recalc from 'stocks'
-            client.table("portfolios").insert({
-                "client_id": get_client_id(client_name),
-                "valeur": add_stock,
-                "quantité": add_qty,
-                "cours": 0.0,
-                "valorisation": 0.0
-            }).execute()
-            st.success(f"Added {add_qty} of {add_stock}")
-            st.experimental_rerun()
+        # Buy button
+        st.write("### Buy Transaction")
+        buy_stock = st.selectbox(f"Stock to BUY for {client_name}", stocks["valeur"].tolist(), key=f"buy_s_{client_name}")
+        buy_price = st.number_input(f"Buy Price for {buy_stock}", min_value=0.0, value=0.0, step=0.01, key=f"buy_price_{client_name}")
+        buy_qty = st.number_input(f"Buy Quantity for {buy_stock}", min_value=1, value=1, key=f"buy_qty_{client_name}")
+        if st.button(f"BUY {buy_stock}", key=f"buy_btn_{client_name}"):
+            buy_shares(client_name, buy_stock, buy_price, buy_qty)
 
-        # Delete Stock/Cash
-        del_choice = st.selectbox(f"Select Stock to Remove ({client_name})", df["valeur"].tolist(), key=f"del_s_{client_name}")
-        if st.button(f"🗑️ Delete {del_choice}", key=f"del_btn_{client_name}"):
-            client.table("portfolios").delete().eq("client_id", get_client_id(client_name)).eq("valeur", del_choice).execute()
-            st.success(f"Removed {del_choice}")
-            st.experimental_rerun()
+        # Sell button
+        st.write("### Sell Transaction")
+        # only allow selling stocks that exist in the portfolio (and are not "Cash")
+        existing_stocks = df[df["valeur"] != "Cash"]["valeur"].unique().tolist()
+        sell_stock = st.selectbox(f"Stock to SELL for {client_name}", existing_stocks, key=f"sell_s_{client_name}")
+        sell_price = st.number_input(f"Sell Price for {sell_stock}", min_value=0.0, value=0.0, step=0.01, key=f"sell_price_{client_name}")
+        sell_qty = st.number_input(f"Sell Quantity for {sell_stock}", min_value=1, value=1, key=f"sell_qty_{client_name}")
+        if st.button(f"SELL {sell_stock}", key=f"sell_btn_{client_name}"):
+            sell_shares(client_name, sell_stock, sell_price, sell_qty)
 
 # ===================== Show All Portfolios =====================
 def show_all_portfolios():
-    """
-    For each client, we re-fetch their portfolio and dynamically compute
-    each row's cours & valorisation from 'stocks', then display read-only.
-    """
     clients = get_all_clients()
     if not clients:
         st.warning("No clients found.")
@@ -243,37 +420,15 @@ def show_all_portfolios():
 
     for cname in clients:
         st.write(f"### Client: {cname}")
-        df = get_portfolio(cname)
-        if df.empty:
-            st.write("No portfolio found for this client.")
-            st.write("---")
-            continue
-
-        # Recompute using current 'stocks' data
-        for i, row in df.iterrows():
-            # find current price
-            matching_price = stocks.loc[stocks["valeur"] == row["valeur"]]
-            price = matching_price["cours"].values[0] if not matching_price.empty else 0.0
-            df.at[i, "cours"] = price
-            df.at[i, "valorisation"] = row["quantité"] * price
-
-        total_val = df["valorisation"].sum()
-        df["poids"] = ((df["valorisation"] / total_val) * 100).round(2) if total_val else 0
-
-        st.dataframe(df[["valeur", "quantité", "cours", "valorisation", "poids"]], use_container_width=True)
-        st.write(f"**Valorisation totale du portefeuille:** {total_val:.2f}")
+        show_portfolio(cname, read_only=True)
         st.write("---")
 
 # ===================== Inventory Page =====================
 def show_inventory():
     """
-    Displays a table with:
-      - valeur
-      - quantité total
-      - valorisation ( aggregated across all clients using the current 'stocks' data )
-      - poids ( fraction of total sum )
-      - portefeuille ( list of clients who hold it )
-    Then shows total assets under management.
+    Now also uses the dynamic approach. 
+    We recalc 'valorisation' for each stock from the sum of 'quantity' * live price across all clients,
+    then compute 'poids' from total.
     """
     clients = get_all_clients()
     if not clients:
@@ -288,18 +443,16 @@ def show_inventory():
         df = get_portfolio(c)
         if not df.empty:
             # We'll recalc using 'stocks'
-            # sum of this portfolio's dynamic valorisation
             portfolio_val = 0.0
             for _, row in df.iterrows():
                 val = row["valeur"]
                 qty = row["quantité"]
-                # find the up-to-date price
-                matching = stocks.loc[stocks["valeur"] == val]
-                price = matching["cours"].values[0] if not matching.empty else 0.0
+                # find current price
+                match = stocks[stocks["valeur"] == val]
+                price = match["cours"].values[0] if not match.empty else 0.0
                 val_agg = qty * price
                 portfolio_val += val_agg
 
-                # Merge quantity
                 master_data[val]["quantity"] += qty
                 master_data[val]["clients"].add(c)
 
@@ -310,14 +463,16 @@ def show_inventory():
         st.write("No stocks or cash found in any portfolio.")
         return
 
-    # Build table
+    # Build the inventory table
     rows_data = []
     sum_of_all_stocks_val = 0.0
+
     for val, info in master_data.items():
-        matching_price = stocks.loc[stocks["valeur"] == val]
-        price = matching_price["cours"].values[0] if not matching_price.empty else 0.0
+        match = stocks[stocks["valeur"] == val]
+        price = match["cours"].values[0] if not match.empty else 0.0
         agg_val = info["quantity"] * price
         sum_of_all_stocks_val += agg_val
+
         rows_data.append({
             "valeur": val,
             "quantité total": info["quantity"],
@@ -325,7 +480,7 @@ def show_inventory():
             "portefeuille": ", ".join(sorted(info["clients"]))
         })
 
-    # Now compute poids
+    # now compute poids
     for row in rows_data:
         if sum_of_all_stocks_val > 0:
             row["poids"] = round(row["valorisation"] / sum_of_all_stocks_val * 100, 2)
@@ -352,7 +507,25 @@ def show_market():
     market_df = get_stock_list()
     st.dataframe(market_df, use_container_width=True)
 
-# ===================== Pages =====================
+# ===================== "Manage Client's Commission & Fees" Page? (Inside Manage Clients) =====================
+# We'll add an inline form inside Manage Clients that sets exchange_commission_rate, tax, mgmt_fee, is_pea
+def set_client_rates_page():
+    st.write("### Set Commissions / Taxes / Fees for a Client")
+    existing = get_all_clients()
+    if not existing:
+        st.warning("No clients to set rates for. Create one first.")
+        return
+
+    with st.form("set_rates_form", clear_on_submit=True):
+        client_choice = st.selectbox("Select Client to Set Rates", existing, key="set_rates_client_choice")
+        exch_comm = st.number_input("Exchange Commission Rate (%)", min_value=0.0, value=0.0, step=0.01)
+        mgmt_fee = st.number_input("Management Fee Rate (%)", min_value=0.0, value=0.0, step=0.01)
+        pea_option = st.checkbox("Is PEA (Tax exempt)?")
+        custom_tax = st.number_input("Custom Tax on Gains (%)", min_value=0.0, value=15.0, step=0.01)
+        if st.form_submit_button("Set Rates"):
+            update_client_rates(client_choice, exch_comm, pea_option, custom_tax, mgmt_fee)
+
+# ===================== PAGES =====================
 page = st.sidebar.selectbox(
     "📂 Navigation",
     [
@@ -369,24 +542,27 @@ if page == "Manage Clients":
     st.title("👤 Manage Clients")
     existing = get_all_clients()
 
+    # 1) Create Clients
     with st.form("add_client_form", clear_on_submit=True):
         new_client_name = st.text_input("New Client Name", key="new_client_input")
         if st.form_submit_button("➕ Add Client"):
             create_client(new_client_name)
 
+    # 2) If clients exist, we rename / delete
     if existing:
-        # Rename
         with st.form("rename_client_form", clear_on_submit=True):
             rename_choice = st.selectbox("Select Client to Rename", options=existing, key="rename_choice")
             rename_new = st.text_input("New Client Name", key="rename_text")
             if st.form_submit_button("✏️ Rename Client"):
                 rename_client(rename_choice, rename_new)
 
-        # Delete
         with st.form("delete_client_form", clear_on_submit=True):
             delete_choice = st.selectbox("Select Client to Delete", options=existing, key="delete_choice")
             if st.form_submit_button("🗑️ Delete Client"):
                 delete_client(delete_choice)
+
+        # 3) Set client rates
+        set_client_rates_page()
 
 elif page == "Create Portfolio":
     st.title("📊 Create Client Portfolio")
