@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 from supabase import create_client
+from collections import defaultdict
 
 # ===================== Supabase Connection =====================
 supabase_url = st.secrets["supabase"]["url"]
@@ -142,7 +143,7 @@ def new_portfolio_creation_ui(client_name):
 def show_portfolio(client_name, read_only=False):
     """
     Display or edit a single portfolio.
-    If read_only=True, no add/remove/save is shown.
+    If read_only=True, it shows a read-only table (like in All Portfolios).
     """
     df = get_portfolio(client_name)
     if df.empty:
@@ -150,31 +151,29 @@ def show_portfolio(client_name, read_only=False):
         return
 
     total_value = df["valorisation"].sum()
-    # Store poids as a numeric float so it can be sorted
+    # Store 'poids' as a float for sorting
     df["poids"] = ((df["valorisation"] / total_value) * 100).round(2)
 
     st.subheader(f"📜 Portfolio for {client_name}")
-    # Show total portfolio value above the table
     st.write(f"**Valorisation totale du portefeuille:** {total_value:.2f}")
 
-    if not read_only:
-        # Editable Table
+    if read_only:
+        # Read-only display
+        st.dataframe(df[["valeur", "quantité", "valorisation", "poids"]], use_container_width=True)
+    else:
+        # Editable table
         edited_df = st.data_editor(
             df[["valeur", "quantité", "valorisation", "poids"]],
             use_container_width=True,
             column_config={
-                "poids": st.column_config.NumberColumn(
-                    "Poids (%)",  # Label in the UI
-                    format="%.2f",
-                    step=0.01
-                ),
+                "poids": st.column_config.NumberColumn("Poids (%)", format="%.2f", step=0.01),
                 "valorisation": st.column_config.NumberColumn("Valorisation", format="%.2f"),
                 "quantité": st.column_config.NumberColumn("Quantité")
             },
             key=f"pf_editor_{client_name}"
         )
 
-        # Save Changes
+        # Save changes
         if st.button(f"💾 Save Portfolio Changes ({client_name})", key=f"save_btn_{client_name}"):
             for index, row in edited_df.iterrows():
                 price = stocks.loc[stocks["valeur"] == row["valeur"], "cours"].values[0]
@@ -208,12 +207,6 @@ def show_portfolio(client_name, read_only=False):
             client.table("portfolios").delete().eq("client_id", get_client_id(client_name)).eq("valeur", del_choice).execute()
             st.success(f"Removed {del_choice}")
             st.experimental_rerun()
-    else:
-        # Read-only display
-        st.dataframe(
-            df[["valeur", "quantité", "valorisation", "poids"]],
-            use_container_width=True
-        )
 
 # ===================== Show All Portfolios =====================
 def show_all_portfolios():
@@ -221,26 +214,71 @@ def show_all_portfolios():
     if not clients:
         st.warning("No clients found.")
         return
-
     for cname in clients:
         st.write(f"### Client: {cname}")
-        df = get_portfolio(cname)
-        if df.empty:
-            st.write("No portfolio found for this client.")
-            st.write("---")
-            continue
-
-        # Show read-only portfolio
-        total_val = df["valorisation"].sum()
-        df["poids"] = ((df["valorisation"] / total_val) * 100).round(2)
-        st.dataframe(df[["valeur", "quantité", "valorisation", "poids"]], use_container_width=True)
-        st.write(f"**Valorisation totale du portefeuille:** {total_val:.2f}")
+        show_portfolio(cname, read_only=True)
         st.write("---")
+
+# ===================== Inventory Page =====================
+def show_inventory():
+    """
+    Displays:
+    1) A table of all stocks & cash across all portfolios,
+       with a total quantity column and a 'portefeuille' column listing which clients hold it.
+    2) The total assets under management = sum of all clients' portfolio values.
+    """
+    clients = get_all_clients()
+    if not clients:
+        st.warning("No clients found. Please create a client first.")
+        return
+
+    # Summation data structure: {valeur: {"quantity": 0, "clients": set()}}
+    from collections import defaultdict
+    master = defaultdict(lambda: {"quantity": 0, "clients": set()})
+
+    total_assets = 0
+
+    for c in clients:
+        df = get_portfolio(c)
+        if not df.empty:
+            # Sum up the total for this client
+            total_val = df["valorisation"].sum()
+            total_assets += total_val
+            # Merge stock quantities
+            for _, row in df.iterrows():
+                val = row["valeur"]
+                q = row["quantité"]
+                master[val]["quantity"] += q
+                master[val]["clients"].add(c)
+
+    # Build table
+    data_rows = []
+    for val, info in master.items():
+        data_rows.append({
+            "valeur": val,
+            "quantité total": info["quantity"],
+            "portefeuille": ", ".join(sorted(info["clients"]))
+        })
+
+    st.title("🗃️ Global Inventory")
+    if data_rows:
+        inv_df = pd.DataFrame(data_rows)
+        st.dataframe(inv_df, use_container_width=True)
+    else:
+        st.write("No stocks or cash found in any portfolio.")
+
+    st.write(f"### Actif sous gestion: {total_assets:.2f}")
 
 # ===================== Pages =====================
 page = st.sidebar.selectbox(
     "📂 Navigation",
-    ["Manage Clients", "Create Portfolio", "View Client Portfolio", "View All Portfolios"]
+    [
+        "Manage Clients",
+        "Create Portfolio",
+        "View Client Portfolio",
+        "View All Portfolios",
+        "Inventory"  # <-- New Page
+    ]
 )
 
 if page == "Manage Clients":
@@ -292,3 +330,6 @@ elif page == "View Client Portfolio":
 elif page == "View All Portfolios":
     st.title("📊 All Clients' Portfolios")
     show_all_portfolios()
+
+elif page == "Inventory":  # New Page
+    show_inventory()
