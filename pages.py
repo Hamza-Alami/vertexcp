@@ -402,3 +402,179 @@ def page_market():
         formatter="{:.2f}"
     )
     st.dataframe(df_styled, use_container_width=True)
+
+########################################
+#  Performance & Fees Page
+########################################
+
+def page_performance_fees():
+    """
+    This page manages performance tracking:
+      - You can select a client, add start_date + start_value
+      - The code fetches current portfolio value
+      - Compares => performance% => fees
+      - Also shows a collapsible summary of all clients (their most recent period).
+    """
+    st.title("📈 Performance & Fees")
+
+    clients = get_all_clients()
+    if not clients:
+        st.warning("No clients found. Create a client first.")
+        return
+
+    client_name = st.selectbox("Select Client", clients, key="perf_fee_select")
+    if not client_name:
+        st.info("Pick a client to continue.")
+        return
+
+    cid = get_client_id(client_name)
+    if cid is None:
+        st.error("No valid client selected.")
+        return
+
+    # 1) Let user add / update a performance period
+    st.subheader("Add or Update Start Date / Start Value")
+
+    with st.form("perf_period_form", clear_on_submit=True):
+        start_date_input = st.date_input("Start Date")
+        start_value_input = st.number_input("Start Value", min_value=0.0, step=0.01, value=0.0)
+        submitted = st.form_submit_button("Save Performance Period")
+        if submitted:
+            # Insert a row in performance_periods
+            # Convert date_input to string 'YYYY-MM-DD'
+            start_date_str = str(start_date_input)
+            create_performance_period(cid, start_date_str, float(start_value_input))
+
+    # 2) Show all performance_period rows for that client
+    st.write("### Existing Performance Periods")
+    df_periods = get_performance_periods_for_client(cid)
+    if df_periods.empty:
+        st.info("No performance periods found for this client yet.")
+    else:
+        # we can display them in descending date order
+        st.dataframe(df_periods[["start_date","start_value","created_at"]], use_container_width=True)
+
+    # 3) Let user pick which "start_date" row to compare for the performance
+    st.subheader("Compute Performance & Fees for a Chosen Start Date")
+    if not df_periods.empty:
+        # sort by start_date descending
+        df_periods = df_periods.sort_values("start_date", ascending=False)
+        start_options = df_periods["start_date"].unique().tolist()
+        selected_start_date = st.selectbox("Select a Start Date for Performance Calculation",
+                                          start_options, key="calc_perf_startdate")
+        row_chosen = df_periods[df_periods["start_date"] == selected_start_date].iloc[0]
+        chosen_start_value = float(row_chosen["start_value"])
+        
+        # 4) fetch client's current total portfolio value
+        df_portfolio = get_portfolio(client_name)
+        if df_portfolio.empty:
+            st.warning("Client has no portfolio.")
+        else:
+            # sum up 'valorisation' if you have it, or compute as in show_portfolio
+            # We'll do a simpler approach: just reuse code or logic:
+            from db_utils import fetch_stocks
+            stocks_df = fetch_stocks()
+
+            # compute total_value
+            total_val = 0.0
+            for _, prow in df_portfolio.iterrows():
+                val = str(prow["valeur"])
+                match = stocks_df[stocks_df["valeur"]==val]
+                live_price = float(match["cours"].values[0]) if not match.empty else 0.0
+                qty_ = float(prow["quantité"])
+                val_ = qty_ * live_price
+                total_val += val_
+
+            # 5) performance% = (total_val - chosen_start_value) / chosen_start_value * 100
+            if chosen_start_value>0:
+                gains = total_val - chosen_start_value
+                performance_pct = (gains / chosen_start_value)*100.0
+            else:
+                gains = 0.0
+                performance_pct = 0.0
+
+            # 6) mgmt_fee = Gains * mgmt_fee_rate, where mgmt_fee_rate is from client info
+            cinfo = get_client_info(client_name)
+            mgmt_rate = float(cinfo.get("management_fee_rate",0.0))/100.0
+            # If you want fees only if gains>0, you can do max(gains,0).
+            fees_owed = gains * mgmt_rate
+            if fees_owed<0:
+                # you can set to 0 if you don't charge negative fees
+                fees_owed = 0.0
+
+            # display results
+            st.write(f"**Start Value**: {chosen_start_value:,.2f}")
+            st.write(f"**Current Value**: {total_val:,.2f}")
+            st.write(f"**Performance %**: {performance_pct:,.2f}%")
+            st.write(f"**Gains**: {gains:,.2f}")
+            st.write(f"**Mgmt Fee Rate**: {cinfo.get('management_fee_rate',0)}%")
+            st.write(f"**Fees Owed**: {fees_owed:,.2f}")
+
+    # 7) Collapsible summary => all clients' most recent start date
+    with st.expander("Résumé de Performance (all clients)"):
+        # We want the "latest" row from performance_periods for each client
+        df_latest = get_latest_performance_period_for_all_clients()
+        if df_latest.empty:
+            st.info("No performance data found for any client.")
+        else:
+            # We'll build a small table: client_name, start_date, start_value, current_value, performance%, fees
+            # We'll do a loop over each row in df_latest
+            # or gather in a list
+            summary_rows = []
+            from db_utils import fetch_stocks
+
+            stocks_df = fetch_stocks()
+
+            for _, rrow in df_latest.iterrows():
+                c_id = rrow["client_id"]
+                start_val = float(rrow["start_value"])
+                ddate = str(rrow["start_date"])
+                # find client name
+                # you may want an inverse mapping or a function
+                # but we can do a cheap approach with get_client_info
+                cinfo2 = None
+                for cname2 in clients:
+                    if get_client_id(cname2) == c_id:
+                        cinfo2 = cname2
+                        break
+                if not cinfo2:
+                    continue
+
+                # compute currentValue
+                pdf = get_portfolio(cinfo2)
+                cur_val = 0.0
+                if not pdf.empty:
+                    for _, prow2 in pdf.iterrows():
+                        val2 = str(prow2["valeur"])
+                        mm = stocks_df[stocks_df["valeur"]==val2]
+                        lp = float(mm["cours"].values[0]) if not mm.empty else 0.0
+                        cur_val += float(prow2["quantité"])* lp
+
+                if start_val>0:
+                    gains2 = cur_val - start_val
+                    perf2 = (gains2 / start_val)*100.0
+                else:
+                    gains2 = 0.0
+                    perf2 = 0.0
+
+                cinfo_db = get_client_info(cinfo2)
+                mgmtr = float(cinfo_db.get("management_fee_rate",0))/100.0
+                fees2 = gains2* mgmtr
+                if fees2<0:
+                    fees2=0.0
+
+                summary_rows.append({
+                    "Client": cinfo2,
+                    "Start Date": ddate,
+                    "Start Value": start_val,
+                    "Current Value": cur_val,
+                    "Performance %": perf2,
+                    "Fees": fees2
+                })
+
+            if not summary_rows:
+                st.info("No valid data to show.")
+            else:
+                df_sum = pd.DataFrame(summary_rows)
+                st.dataframe(df_sum, use_container_width=True)
+
