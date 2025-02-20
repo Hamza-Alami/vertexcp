@@ -578,14 +578,11 @@ def page_performance_fees():
                 df_sum = pd.DataFrame(summary_rows)
                 st.dataframe(df_sum, use_container_width=True)
             
-                # ===== Add totals here =====
+                # ===== Add totals in a single-row table =====
                 total_start_val = df_sum["Start Value"].sum()
                 total_cur_val   = df_sum["Current Value"].sum()
                 total_fees      = df_sum["Fees"].sum()
             
-                st.write(
-                    f"**Total:** "
-                    f"Start Value = {total_start_val:,.2f}, "
-                    f"Current Value = {total_cur_val:,.2f}, "
-                    f"Fees = {total_fees:,.2f}"
-                )
+                # Create a one-row DataFrame for totals:
+                totals_df = pd.DataFrame([{
+                    "Start Value (Total)": total_start_val,
