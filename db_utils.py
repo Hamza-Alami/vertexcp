@@ -153,21 +153,19 @@ def performance_table():
     """
     return get_supabase_client().table("performance_periods")
 
-def create_performance_period(client_id: int, start_date: str, start_value: float):
+def create_performance_period(client_id, start_date_str, start_val):
     """
-    Inserts a new performance period row for (client_id, start_date, start_value).
-    start_date in 'YYYY-MM-DD' format or any date recognized by Postgres.
+    Inserts a row into your 'performance_periods' table.
+    Make sure the table is created in your DB.
     """
+    client = get_supabase()
     try:
-        res = performance_table().insert({
+        row = {
             "client_id": client_id,
-            "start_date": start_date,   # e.g. '2025-02-28'
-            "start_value": start_value
-        }).execute()
-        if res.data:
-            st.success("Performance period created!")
-        else:
-            st.error(f"Failed to create performance period: {res.error}")
+            "start_date": start_date_str,
+            "start_value": start_val,
+        }
+        client.table("performance_periods").insert(row).execute()
     except Exception as e:
         st.error(f"DB Error creating performance period: {e}")
 
