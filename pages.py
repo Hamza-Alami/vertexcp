@@ -513,7 +513,7 @@ def page_performance_fees():
     # 7) Collapsible summary => all clients' most recent start date
     with st.expander("Résumé de Performance (all clients)"):
         # We want the "latest" row from performance_periods for each client
-        df_latest = get_latest_performance_period_for_all_clients()
+        df_latest = db_utils.get_latest_performance_period_for_all_clients()
         if df_latest.empty:
             st.info("No performance data found for any client.")
         else:
