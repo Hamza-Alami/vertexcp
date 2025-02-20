@@ -466,7 +466,7 @@ def page_performance_fees():
         chosen_start_value = float(row_chosen["start_value"])
         
         # 4) fetch client's current total portfolio value
-        df_portfolio = get_portfolio(client_name)
+        df_portfolio = db_utils.get_portfolio(client_name)
         if df_portfolio.empty:
             st.warning("Client has no portfolio.")
         else:
