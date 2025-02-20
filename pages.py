@@ -572,17 +572,27 @@ def page_performance_fees():
                     "Fees": fees2
                 })
 
-            if not summary_rows:
-                st.info("No valid data to show.")
-            else:
-                df_sum = pd.DataFrame(summary_rows)
-                st.dataframe(df_sum, use_container_width=True)
-            
-                # ===== Add totals in a single-row table =====
-                total_start_val = df_sum["Start Value"].sum()
-                total_cur_val   = df_sum["Current Value"].sum()
-                total_fees      = df_sum["Fees"].sum()
-            
-                # Create a one-row DataFrame for totals:
-                totals_df = pd.DataFrame([{
-                    "Start Value (Total)": total_start_val,
+                if not summary_rows:
+                    st.info("No valid data to show.")
+                else:
+                    df_sum = pd.DataFrame(summary_rows)
+                    st.dataframe(df_sum, use_container_width=True)
+                
+                    # ===== Add totals in a single-row table =====
+                    total_start_val = df_sum["Start Value"].sum()
+                    total_cur_val   = df_sum["Current Value"].sum()
+                    total_fees      = df_sum["Fees"].sum()
+                
+                    # Create a one-row DataFrame for totals
+                    totals_df = pd.DataFrame([{
+                        "Start Value (Total)": total_start_val,
+                        "Current Value (Total)": total_cur_val,
+                        "Fees (Total)": total_fees,
+                    }])
+                
+                    # Optionally style or format numeric columns:
+                    st.write("#### Totals")
+                    st.dataframe(
+                        totals_df.style.format("{:,.2f}"),
+                        use_container_width=True
+                    )
