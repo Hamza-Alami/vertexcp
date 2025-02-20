@@ -557,7 +557,7 @@ def page_performance_fees():
                     gains2 = 0.0
                     perf2 = 0.0
 
-                cinfo_db = get_client_info(cinfo2)
+                cinfo_db = db_utils.get_client_info(cinfo2)
                 mgmtr = float(cinfo_db.get("management_fee_rate",0))/100.0
                 fees2 = gains2* mgmtr
                 if fees2<0:
