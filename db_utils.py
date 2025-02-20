@@ -97,7 +97,7 @@ def create_client(name):
     try:
         client_table().insert({"name": name}).execute()
         st.success(f"Client '{name}' added!")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error adding client: {e}")
 
@@ -110,7 +110,7 @@ def rename_client(old_name, new_name):
     try:
         client_table().update({"name": new_name}).eq("id", cid).execute()
         st.success(f"Renamed '{old_name}' to '{new_name}'")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error renaming client: {e}")
 
@@ -123,7 +123,7 @@ def delete_client(cname):
     try:
         client_table().delete().eq("id", cid).execute()
         st.success(f"Deleted client '{cname}'")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error deleting client: {e}")
 
@@ -142,6 +142,6 @@ def update_client_rates(client_name, exchange_comm, is_pea, custom_tax, mgmt_fee
             "management_fee_rate": float(mgmt_fee)
         }).eq("id", cid).execute()
         st.success(f"Updated rates for {client_name}")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error updating client rates: {e}")
