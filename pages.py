@@ -494,7 +494,7 @@ def page_performance_fees():
                 performance_pct = 0.0
 
             # 6) mgmt_fee = Gains * mgmt_fee_rate, where mgmt_fee_rate is from client info
-            cinfo = get_client_info(client_name)
+            cinfo = db_utils.get_client_info(client_name)
             mgmt_rate = float(cinfo.get("management_fee_rate",0.0))/100.0
             # If you want fees only if gains>0, you can do max(gains,0).
             fees_owed = gains * mgmt_rate
