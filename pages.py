@@ -252,7 +252,7 @@ def show_portfolio(client_name, read_only=False):
                 except Exception as e:
                     st.error(f"Error saving edits for {valn}: {e}")
             st.success(f"Portfolio updated for '{client_name}'!")
-            st.experimental_rerun()
+            st.rerun()
 
     # BUY
     st.write("### Buy Transaction")
