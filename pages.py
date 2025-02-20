@@ -443,7 +443,7 @@ def page_performance_fees():
             # Insert a row in performance_periods
             # Convert date_input to string 'YYYY-MM-DD'
             start_date_str = str(start_date_input)
-            create_performance_period(cid, start_date_str, float(start_value_input))
+            db_utils.create_performance_period(cid, start_date_str, float(start_value_input))
 
     # 2) Show all performance_period rows for that client
     st.write("### Existing Performance Periods")
