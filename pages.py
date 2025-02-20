@@ -509,90 +509,89 @@ def page_performance_fees():
                 st.write(f"**Gains**: {gains:,.2f}")
                 st.write(f"**Mgmt Fee Rate**: {cinfo.get('management_fee_rate',0)}%")
                 st.write(f"**Fees Owed**: {fees_owed:,.2f}")
-                
-            # 7) Collapsible summary => all clients' most recent start date
-            with st.expander("Résumé de Performance (all clients)"):
-                # We want the "latest" row from performance_periods for each client
-                df_latest = db_utils.get_latest_performance_period_for_all_clients()
-                if df_latest.empty:
-                    st.info("No performance data found for any client.")
-                else:
-                    # We'll build a small table: client_name, start_date, start_value, current_value, performance%, fees
-                    summary_rows = []
-                    from db_utils import fetch_stocks
-            
-                    stocks_df = fetch_stocks()
-            
-                    for _, rrow in df_latest.iterrows():
-                        c_id = rrow["client_id"]
-                        start_val = float(rrow["start_value"])
-                        ddate = str(rrow["start_date"])
-            
-                        # find client name
-                        cinfo2 = None
-                        for cname2 in clients:
-                            if db_utils.get_client_id(cname2) == c_id:
-                                cinfo2 = cname2
-                                break
-                        if not cinfo2:
-                            continue
-            
-                        # compute currentValue
-                        pdf = db_utils.get_portfolio(cinfo2)
-                        cur_val = 0.0
-                        if not pdf.empty:
-                            for _, prow2 in pdf.iterrows():
-                                val2 = str(prow2["valeur"])
-                                mm = stocks_df[stocks_df["valeur"] == val2]
-                                lp = float(mm["cours"].values[0]) if not mm.empty else 0.0
-                                cur_val += float(prow2["quantité"]) * lp
-            
-                        # performance
-                        if start_val > 0:
-                            gains2 = cur_val - start_val
-                            perf2 = (gains2 / start_val) * 100.0
-                        else:
-                            gains2 = 0.0
-                            perf2 = 0.0
-            
-                        # mgmt fee
-                        cinfo_db = db_utils.get_client_info(cinfo2)
-                        mgmtr = float(cinfo_db.get("management_fee_rate", 0)) / 100.0
-                        fees2 = gains2 * mgmtr
-                        if fees2 < 0:
-                            fees2 = 0.0
-            
-                        summary_rows.append({
-                            "Client": cinfo2,
-                            "Start Date": ddate,
-                            "Start Value": start_val,
-                            "Current Value": cur_val,
-                            "Performance %": perf2,
-                            "Fees": fees2
-                        })
-            
-                    # Now that we're done building summary_rows for all clients, let's display:
-                    if not summary_rows:
-                        st.info("No valid data to show.")
+
+        # 7) Collapsible summary => all clients' most recent start date
+        with st.expander("Résumé de Performance (all clients)"):
+            # We want the "latest" row from performance_periods for each client
+            df_latest = db_utils.get_latest_performance_period_for_all_clients()
+            if df_latest.empty:
+                st.info("No performance data found for any client.")
+            else:
+                # We'll build a small table: client_name, start_date, start_value, current_value, performance%, fees
+                summary_rows = []
+                from db_utils import fetch_stocks
+        
+                stocks_df = fetch_stocks()
+        
+                for _, rrow in df_latest.iterrows():
+                    c_id = rrow["client_id"]
+                    start_val = float(rrow["start_value"])
+                    ddate = str(rrow["start_date"])
+        
+                    # find client name
+                    cinfo2 = None
+                    for cname2 in clients:
+                        if db_utils.get_client_id(cname2) == c_id:
+                            cinfo2 = cname2
+                            break
+                    if not cinfo2:
+                        continue
+        
+                    # compute currentValue
+                    pdf = db_utils.get_portfolio(cinfo2)
+                    cur_val = 0.0
+                    if not pdf.empty:
+                        for _, prow2 in pdf.iterrows():
+                            val2 = str(prow2["valeur"])
+                            mm = stocks_df[stocks_df["valeur"] == val2]
+                            lp = float(mm["cours"].values[0]) if not mm.empty else 0.0
+                            cur_val += float(prow2["quantité"]) * lp
+        
+                    # performance
+                    if start_val > 0:
+                        gains2 = cur_val - start_val
+                        perf2 = (gains2 / start_val) * 100.0
                     else:
-                        df_sum = pd.DataFrame(summary_rows)
-                        st.dataframe(df_sum, use_container_width=True)
-            
-                        # ===== Add totals in a single-row table =====
-                        total_start_val = df_sum["Start Value"].sum()
-                        total_cur_val   = df_sum["Current Value"].sum()
-                        total_fees      = df_sum["Fees"].sum()
-            
-                        # Create a one-row DataFrame for totals
-                        totals_df = pd.DataFrame([{
-                            "Start Value (Total)": total_start_val,
-                            "Current Value (Total)": total_cur_val,
-                            "Fees (Total)": total_fees,
-                        }])
-            
-                        st.write("#### Totals")
-                        st.dataframe(
-                            totals_df.style.format("{:,.2f}"),
-                            use_container_width=True
-                        )
-            
+                        gains2 = 0.0
+                        perf2 = 0.0
+        
+                    # mgmt fee
+                    cinfo_db = db_utils.get_client_info(cinfo2)
+                    mgmtr = float(cinfo_db.get("management_fee_rate", 0)) / 100.0
+                    fees2 = gains2 * mgmtr
+                    if fees2 < 0:
+                        fees2 = 0.0
+        
+                    summary_rows.append({
+                        "Client": cinfo2,
+                        "Start Date": ddate,
+                        "Start Value": start_val,
+                        "Current Value": cur_val,
+                        "Performance %": perf2,
+                        "Fees": fees2
+                    })
+        
+                # Now that we're done building summary_rows for all clients, let's display:
+                if not summary_rows:
+                    st.info("No valid data to show.")
+                else:
+                    df_sum = pd.DataFrame(summary_rows)
+                    st.dataframe(df_sum, use_container_width=True)
+        
+                    # ===== Add totals in a single-row table =====
+                    total_start_val = df_sum["Start Value"].sum()
+                    total_cur_val   = df_sum["Current Value"].sum()
+                    total_fees      = df_sum["Fees"].sum()
+        
+                    # Create a one-row DataFrame for totals
+                    totals_df = pd.DataFrame([{
+                        "Start Value (Total)": total_start_val,
+                        "Current Value (Total)": total_cur_val,
+                        "Fees (Total)": total_fees,
+                    }])
+        
+                    st.write("#### Totals")
+                    st.dataframe(
+                        totals_df.style.format("{:,.2f}"),
+                        use_container_width=True
+                    )
