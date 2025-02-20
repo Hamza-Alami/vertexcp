@@ -129,7 +129,7 @@ def create_client(name):
     try:
         client.table("clients").insert({"name": name}).execute()
         st.success(f"Client '{name}' added!")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error adding client: {e}")
 
@@ -141,7 +141,7 @@ def rename_client(old_name, new_name):
     try:
         client.table("clients").update({"name": new_name}).eq("id", cid).execute()
         st.success(f"Renamed '{old_name}' to '{new_name}'")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error renaming client: {e}")
 
@@ -153,7 +153,7 @@ def delete_client(cname):
     try:
         client.table("clients").delete().eq("id", cid).execute()
         st.success(f"Deleted client '{cname}'")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error deleting client: {e}")
 
@@ -171,7 +171,7 @@ def update_client_rates(client_name, exchange_comm, is_pea, custom_tax, mgmt_fee
             "management_fee_rate": float(mgmt_fee)
         }).eq("id", cid).execute()
         st.success(f"Updated rates for {client_name}")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error updating client rates: {e}")
 
@@ -204,7 +204,7 @@ def create_portfolio_rows(client_name, holdings):
     try:
         client.table("portfolios").upsert(rows, on_conflict="client_id,valeur").execute()
         st.success(f"Portfolio created for '{client_name}'!")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error creating portfolio: {e}")
 
@@ -316,7 +316,7 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
             return
 
     st.success(f"Bought {quantity} of {stock_name} at {transaction_price:.2f}, total cost {cost_with_comm:.2f} (incl. commission)")
-    st.experimental_rerun()
+    st.rerun()
 
 # ===================== "Sell" Transaction =====================
 def sell_shares(client_name, stock_name, transaction_price, quantity):
@@ -393,7 +393,7 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
         return
 
     st.success(f"Sold {quantity} of {stock_name} at {transaction_price:.2f}, net {net_proceeds:.2f}.")
-    st.experimental_rerun()
+    st.rerun()
 
 # ===================== Show Single Portfolio =====================
 def show_portfolio(client_name, read_only=False):
@@ -536,7 +536,7 @@ def show_portfolio(client_name, read_only=False):
                 except Exception as e:
                     st.error(f"Error saving edits for {valn}: {e}")
             st.success(f"Portfolio updated for '{client_name}'!")
-            st.experimental_rerun()
+            st.rerun()
 
     # BUY
     st.write("### Buy Transaction")
