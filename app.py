@@ -1,3 +1,4 @@
+# app.py (assuming you have the same structure)
 import streamlit as st
 from pages import (
     page_manage_clients,
@@ -5,7 +6,8 @@ from pages import (
     page_view_client_portfolio,
     page_view_all_portfolios,
     page_inventory,
-    page_market
+    page_market,
+    page_performance_fees  # new import
 )
 
 def main():
@@ -17,7 +19,8 @@ def main():
             "View Client Portfolio",
             "View All Portfolios",
             "Inventory",
-            "Market"
+            "Market",
+            "Performance & Fees"  # Add new
         ]
     )
     if page == "Manage Clients":
@@ -32,6 +35,8 @@ def main():
         page_inventory()
     elif page == "Market":
         page_market()
+    elif page == "Performance & Fees":
+        page_performance_fees()  # call new function
 
 if __name__ == "__main__":
     main()
