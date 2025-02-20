@@ -447,7 +447,7 @@ def page_performance_fees():
 
     # 2) Show all performance_period rows for that client
     st.write("### Existing Performance Periods")
-    df_periods = get_performance_periods_for_client(cid)
+    df_periods = db_utils.get_performance_periods_for_client(cid)
     if df_periods.empty:
         st.info("No performance periods found for this client yet.")
     else:
