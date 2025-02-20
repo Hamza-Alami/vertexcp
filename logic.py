@@ -75,7 +75,7 @@ def create_portfolio_rows(client_name, holdings):
     try:
         portfolio_table().upsert(rows, on_conflict="client_id,valeur").execute()
         st.success(f"Portfolio created for '{client_name}'!")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Error creating portfolio: {e}")
 
@@ -190,7 +190,7 @@ def buy_shares(client_name, stock_name, transaction_price, quantity):
             st.error(f"Error updating cash: {e}")
             return
     st.success(f"Bought {quantity} of {stock_name} @ {transaction_price:.2f} => cost {cost_with_comm:.2f}")
-    st.experimental_rerun()
+    st.rerun()
 
 def sell_shares(client_name, stock_name, transaction_price, quantity):
     from db_utils import get_portfolio, get_client_info, get_client_id, portfolio_table
@@ -258,4 +258,4 @@ def sell_shares(client_name, stock_name, transaction_price, quantity):
         st.error(f"Error updating cash after sell: {e}")
         return
     st.success(f"Sold {quantity} of {stock_name} => net {net_proceeds:.2f}")
-    st.experimental_rerun()
+    st.rerun()
