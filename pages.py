@@ -541,7 +541,7 @@ def page_performance_fees():
                     continue
 
                 # compute currentValue
-                pdf = get_portfolio(cinfo2)
+                pdf = db_utils.get_portfolio(cinfo2)
                 cur_val = 0.0
                 if not pdf.empty:
                     for _, prow2 in pdf.iterrows():
