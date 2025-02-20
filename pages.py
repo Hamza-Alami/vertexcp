@@ -433,7 +433,7 @@ def page_performance_fees():
         return
 
     # 1) Let user add / update a performance period
-    with st.expander("Add or Update Start Date / Start Value")
+    with st.expander("Add or Update Start Date / Start Value"):
 
     with st.form("perf_period_form", clear_on_submit=True):
         start_date_input = st.date_input("Start Date")
