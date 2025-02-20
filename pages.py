@@ -427,7 +427,7 @@ def page_performance_fees():
         st.info("Pick a client to continue.")
         return
 
-    cid = get_client_id(client_name)
+    cid = db_utils.get_client_id(client_name)
     if cid is None:
         st.error("No valid client selected.")
         return
@@ -534,7 +534,7 @@ def page_performance_fees():
                 # but we can do a cheap approach with get_client_info
                 cinfo2 = None
                 for cname2 in clients:
-                    if get_client_id(cname2) == c_id:
+                    if db_utils.get_client_id(cname2) == c_id:
                         cinfo2 = cname2
                         break
                 if not cinfo2:
