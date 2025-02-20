@@ -446,13 +446,13 @@ def page_performance_fees():
                 db_utils.create_performance_period(cid, start_date_str, float(start_value_input))
 
     # 2) Show all performance_period rows for that client
-    st.write("### Existing Performance Periods")
-    df_periods = db_utils.get_performance_periods_for_client(cid)
-    if df_periods.empty:
-        st.info("No performance periods found for this client yet.")
-    else:
+    with st.expander("### Existing Performance Periods"):
+        df_periods = db_utils.get_performance_periods_for_client(cid)
+        if df_periods.empty:
+            st.info("No performance periods found for this client yet.")
+        else:
         # we can display them in descending date order
-        st.dataframe(df_periods[["start_date","start_value","created_at"]], use_container_width=True)
+            st.dataframe(df_periods[["start_date","start_value","created_at"]], use_container_width=True)
 
     # 3) Let user pick which "start_date" row to compare for the performance
     st.subheader("Compute Performance & Fees for a Chosen Start Date")
