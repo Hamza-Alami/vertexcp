@@ -435,15 +435,15 @@ def page_performance_fees():
     # 1) Let user add / update a performance period
     with st.expander("Add or Update Start Date / Start Value"):
 
-    with st.form("perf_period_form", clear_on_submit=True):
-        start_date_input = st.date_input("Start Date")
-        start_value_input = st.number_input("Start Value", min_value=0.0, step=0.01, value=0.0)
-        submitted = st.form_submit_button("Save Performance Period")
-        if submitted:
+        with st.form("perf_period_form", clear_on_submit=True):
+            start_date_input = st.date_input("Start Date")
+            start_value_input = st.number_input("Start Value", min_value=0.0, step=0.01, value=0.0)
+            submitted = st.form_submit_button("Save Performance Period")
+            if submitted:
             # Insert a row in performance_periods
             # Convert date_input to string 'YYYY-MM-DD'
-            start_date_str = str(start_date_input)
-            db_utils.create_performance_period(cid, start_date_str, float(start_value_input))
+                start_date_str = str(start_date_input)
+                db_utils.create_performance_period(cid, start_date_str, float(start_value_input))
 
     # 2) Show all performance_period rows for that client
     st.write("### Existing Performance Periods")
