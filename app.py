@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 from pages import (
     page_manage_clients,
@@ -10,7 +9,7 @@ from pages import (
 )
 
 def main():
-    page= st.sidebar.selectbox(
+    page = st.sidebar.selectbox(
         "📂 Navigation",
         [
             "Manage Clients",
@@ -21,18 +20,18 @@ def main():
             "Market"
         ]
     )
-    if page=="Manage Clients":
+    if page == "Manage Clients":
         page_manage_clients()
-    elif page=="Create Portfolio":
+    elif page == "Create Portfolio":
         page_create_portfolio()
-    elif page=="View Client Portfolio":
+    elif page == "View Client Portfolio":
         page_view_client_portfolio()
-    elif page=="View All Portfolios":
+    elif page == "View All Portfolios":
         page_view_all_portfolios()
-    elif page=="Inventory":
+    elif page == "Inventory":
         page_inventory()
-    elif page=="Market":
+    elif page == "Market":
         page_market()
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
