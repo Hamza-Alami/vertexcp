@@ -455,60 +455,60 @@ def page_performance_fees():
             st.dataframe(df_periods[["start_date","start_value","created_at"]], use_container_width=True)
 
     # 3) Let user pick which "start_date" row to compare for the performance
-    st.subheader("Compute Performance & Fees for a Chosen Start Date")
-    if not df_periods.empty:
+    with st.expander("Compute Performance & Fees for a Chosen Start Date"):
+        if not df_periods.empty:
         # sort by start_date descending
-        df_periods = df_periods.sort_values("start_date", ascending=False)
-        start_options = df_periods["start_date"].unique().tolist()
-        selected_start_date = st.selectbox("Select a Start Date for Performance Calculation",
-                                          start_options, key="calc_perf_startdate")
-        row_chosen = df_periods[df_periods["start_date"] == selected_start_date].iloc[0]
-        chosen_start_value = float(row_chosen["start_value"])
+            df_periods = df_periods.sort_values("start_date", ascending=False)
+            start_options = df_periods["start_date"].unique().tolist()
+            selected_start_date = st.selectbox("Select a Start Date for Performance Calculation",
+                                              start_options, key="calc_perf_startdate")
+            row_chosen = df_periods[df_periods["start_date"] == selected_start_date].iloc[0]
+            chosen_start_value = float(row_chosen["start_value"])
         
         # 4) fetch client's current total portfolio value
-        df_portfolio = db_utils.get_portfolio(client_name)
-        if df_portfolio.empty:
-            st.warning("Client has no portfolio.")
-        else:
+            df_portfolio = db_utils.get_portfolio(client_name)
+            if df_portfolio.empty:
+                st.warning("Client has no portfolio.")
+            else:
             # sum up 'valorisation' if you have it, or compute as in show_portfolio
             # We'll do a simpler approach: just reuse code or logic:
-            from db_utils import fetch_stocks
-            stocks_df = fetch_stocks()
+                from db_utils import fetch_stocks
+                stocks_df = fetch_stocks()
 
             # compute total_value
-            total_val = 0.0
-            for _, prow in df_portfolio.iterrows():
-                val = str(prow["valeur"])
-                match = stocks_df[stocks_df["valeur"]==val]
-                live_price = float(match["cours"].values[0]) if not match.empty else 0.0
-                qty_ = float(prow["quantité"])
-                val_ = qty_ * live_price
-                total_val += val_
+                total_val = 0.0
+                for _, prow in df_portfolio.iterrows():
+                    val = str(prow["valeur"])
+                    match = stocks_df[stocks_df["valeur"]==val]
+                    live_price = float(match["cours"].values[0]) if not match.empty else 0.0
+                    qty_ = float(prow["quantité"])
+                    val_ = qty_ * live_price
+                    total_val += val_
 
             # 5) performance% = (total_val - chosen_start_value) / chosen_start_value * 100
-            if chosen_start_value>0:
-                gains = total_val - chosen_start_value
-                performance_pct = (gains / chosen_start_value)*100.0
-            else:
-                gains = 0.0
-                performance_pct = 0.0
+                if chosen_start_value>0:
+                    gains = total_val - chosen_start_value
+                    performance_pct = (gains / chosen_start_value)*100.0
+                else:
+                    gains = 0.0
+                    performance_pct = 0.0
 
             # 6) mgmt_fee = Gains * mgmt_fee_rate, where mgmt_fee_rate is from client info
-            cinfo = db_utils.get_client_info(client_name)
-            mgmt_rate = float(cinfo.get("management_fee_rate",0.0))/100.0
+                cinfo = db_utils.get_client_info(client_name)
+                mgmt_rate = float(cinfo.get("management_fee_rate",0.0))/100.0
             # If you want fees only if gains>0, you can do max(gains,0).
-            fees_owed = gains * mgmt_rate
-            if fees_owed<0:
+                fees_owed = gains * mgmt_rate
+                if fees_owed<0:
                 # you can set to 0 if you don't charge negative fees
-                fees_owed = 0.0
+                    fees_owed = 0.0
 
             # display results
-            st.write(f"**Start Value**: {chosen_start_value:,.2f}")
-            st.write(f"**Current Value**: {total_val:,.2f}")
-            st.write(f"**Performance %**: {performance_pct:,.2f}%")
-            st.write(f"**Gains**: {gains:,.2f}")
-            st.write(f"**Mgmt Fee Rate**: {cinfo.get('management_fee_rate',0)}%")
-            st.write(f"**Fees Owed**: {fees_owed:,.2f}")
+                st.write(f"**Start Value**: {chosen_start_value:,.2f}")
+                st.write(f"**Current Value**: {total_val:,.2f}")
+                st.write(f"**Performance %**: {performance_pct:,.2f}%")
+                st.write(f"**Gains**: {gains:,.2f}")
+                st.write(f"**Mgmt Fee Rate**: {cinfo.get('management_fee_rate',0)}%")
+                st.write(f"**Fees Owed**: {fees_owed:,.2f}")
 
     # 7) Collapsible summary => all clients' most recent start date
     with st.expander("Résumé de Performance (all clients)"):
