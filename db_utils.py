@@ -1,5 +1,6 @@
 # db_utils.py
 import pandas as pd
+import streamlit as st
 from db_connection import get_supabase_client
 
 def get_supabase():
