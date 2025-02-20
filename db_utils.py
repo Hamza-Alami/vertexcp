@@ -145,3 +145,57 @@ def update_client_rates(client_name, exchange_comm, is_pea, custom_tax, mgmt_fee
         st.rerun()
     except Exception as e:
         st.error(f"Error updating client rates: {e}")
+
+def performance_table():
+    """
+    Returns the Supabase table object for 'performance_periods'.
+    """
+    return get_supabase_client().table("performance_periods")
+
+def create_performance_period(client_id: int, start_date: str, start_value: float):
+    """
+    Inserts a new performance period row for (client_id, start_date, start_value).
+    start_date in 'YYYY-MM-DD' format or any date recognized by Postgres.
+    """
+    try:
+        res = performance_table().insert({
+            "client_id": client_id,
+            "start_date": start_date,   # e.g. '2025-02-28'
+            "start_value": start_value
+        }).execute()
+        if res.data:
+            st.success("Performance period created!")
+        else:
+            st.error(f"Failed to create performance period: {res.error}")
+    except Exception as e:
+        st.error(f"DB Error creating performance period: {e}")
+
+def get_performance_periods_for_client(client_id: int):
+    """
+    Returns all performance_periods rows for the given client_id, sorted by date DESC.
+    """
+    res = performance_table().select("*").eq("client_id", client_id).order("start_date", desc=True).execute()
+    if res.data:
+        return pd.DataFrame(res.data)
+    return pd.DataFrame(columns=["id","client_id","start_date","start_value","created_at"])
+
+def get_latest_performance_period_for_all_clients():
+    """
+    For each client that has at least one performance_period entry,
+    fetch the *most recent* row (by start_date) and return them in a DataFrame.
+    We can do this by grouping or by a 2-step approach in Python.
+    """
+    # Grab all rows
+    all_res = performance_table().select("*").execute()
+    if not all_res.data:
+        return pd.DataFrame(columns=["client_id","start_date","start_value"])
+    
+    df = pd.DataFrame(all_res.data)
+    if df.empty:
+        return df
+    
+    # Sort by (client_id, start_date DESC) so the first row per client is the newest
+    df = df.sort_values(["client_id","start_date"], ascending=[True,False])
+    # group by client_id, take first row => "most recent" per client
+    latest = df.groupby("client_id", as_index=False).head(1)
+    return latest.reset_index(drop=True)
