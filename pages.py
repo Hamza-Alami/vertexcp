@@ -141,9 +141,9 @@ def show_portfolio(client_name, read_only=False):
                 df.drop(columns=c, inplace=True)
 
         columns_display = [
-            "Valeur", "Quantité", "CMP", "Cours", 
-            "Valorisation intiale", "Valorisation", "Performance latente",
-            "Poids", "Poids masi"
+            "valeur", "quantité", "vwap", "cours", 
+            "cost_total", "valorisation", "performance_latente",
+            "poids", "poids_masi"
         ]
         avail_cols = [x for x in columns_display if x in df.columns]
         df_display = df[avail_cols].copy()
@@ -170,7 +170,7 @@ def show_portfolio(client_name, read_only=False):
         return
 
     # If not read_only => full editing features (commissions, buy/sell, etc.)
-    with st.expander(f"Edit Commission/Taxes/Fees for {client_name}", expanded=False):
+    with st.expander(f"Modifier les Comissions/Taxes/Fees pour {client_name}", expanded=False):
         cinfo = db_utils.get_client_info(client_name)
         if cinfo:
             exch = float(cinfo.get("exchange_commission_rate") or 0.0)
@@ -179,24 +179,24 @@ def show_portfolio(client_name, read_only=False):
             tax  = float(cinfo.get("tax_on_gains_rate") or 15.0)
 
             new_exch = st.number_input(
-                f"Exchange Commission Rate (%) - {client_name}", 
+                f"Commission d'intermediation (%) - {client_name}", 
                 min_value=0.0, value=exch, step=0.01, key=f"exch_{client_name}"
             )
             new_mgmt = st.number_input(
-                f"Management Fee Rate (%) - {client_name}", 
+                f"Frais de gestion (%) - {client_name}", 
                 min_value=0.0, value=mgf, step=0.01, key=f"mgf_{client_name}"
             )
             new_pea  = st.checkbox(
-                f"Is {client_name} PEA (Tax Exempt)?",
+                f"Le {client_name} a un compte PEA ?",
                 value=pea, 
                 key=f"pea_{client_name}"
             )
             new_tax = st.number_input(
-                f"Tax on Gains (%) - {client_name}", 
+                f"TPCVM (%) - {client_name}", 
                 min_value=0.0, value=tax, step=0.01, key=f"tax_{client_name}"
             )
 
-            if st.button(f"Update Client Rates - {client_name}", key=f"update_rates_{client_name}"):
+            if st.button(f"Modifier les commissions du client - {client_name}", key=f"update_rates_{client_name}"):
                 update_client_rates(client_name, new_exch, new_pea, new_tax, new_mgmt)
 
     columns_display = [
@@ -229,7 +229,7 @@ def show_portfolio(client_name, read_only=False):
     st.write("#### Current Holdings (Poids Masi shown, 0% if Cash)")
     st.dataframe(df_styled, use_container_width=True)
 
-    with st.expander("Manual Edits (Quantity / VWAP)", expanded=False):
+    with st.expander("Edition manuelle du portefeuille  (Qté / CMP)", expanded=False):
         edit_cols = ["valeur","quantité","vwap"]
         edf = df[edit_cols].drop(columns="__cash_marker", errors="ignore").copy()
         updated_df = st.data_editor(
@@ -237,7 +237,7 @@ def show_portfolio(client_name, read_only=False):
             use_container_width=True,
             key=f"portfolio_editor_{client_name}",
         )
-        if st.button(f"💾 Save Edits (Quantity / VWAP) for {client_name}", key=f"save_edits_btn_{client_name}"):
+        if st.button(f"💾 Enregsiter les modifications pour {client_name}", key=f"save_edits_btn_{client_name}"):
             from db_utils import portfolio_table
             cid2 = db_utils.get_client_id(client_name)
             for idx, row2 in updated_df.iterrows():
@@ -250,28 +250,28 @@ def show_portfolio(client_name, read_only=False):
                         "vwap": vw
                     }).eq("client_id", cid2).eq("valeur", valn).execute()
                 except Exception as e:
-                    st.error(f"Error saving edits for {valn}: {e}")
-            st.success(f"Portfolio updated for '{client_name}'!")
+                    st.error(f"Erreur dans la savegarde des modifications {valn}: {e}")
+            st.success(f"Portefeuille actualisé avec succés '{client_name}'!")
             st.rerun()
 
     # BUY
-    st.write("### Buy Transaction")
+    st.write("### Achat")
     from logic import buy_shares
     _stocks = db_utils.fetch_stocks()
-    buy_stock = st.selectbox(f"Stock to BUY for {client_name}", _stocks["valeur"].tolist(), key=f"buy_s_{client_name}")
-    buy_price = st.number_input(f"Buy Price for {buy_stock}", min_value=0.0, value=0.0, step=0.01, key=f"buy_price_{client_name}")
-    buy_qty   = st.number_input(f"Buy Quantity for {buy_stock}", min_value=1.0, value=1.0, step=0.01, key=f"buy_qty_{client_name}")
-    if st.button(f"BUY {buy_stock}", key=f"buy_btn_{client_name}"):
+    buy_stock = st.selectbox(f"Valeur a acheter pour {client_name}", _stocks["valeur"].tolist(), key=f"buy_s_{client_name}")
+    buy_price = st.number_input(f"Prix d'achat de {buy_stock}", min_value=0.0, value=0.0, step=0.01, key=f"buy_price_{client_name}")
+    buy_qty   = st.number_input(f"Quantité de {buy_stock}", min_value=1.0, value=1.0, step=0.01, key=f"buy_qty_{client_name}")
+    if st.button(f"Acheter {buy_stock}", key=f"buy_btn_{client_name}"):
         buy_shares(client_name, buy_stock, buy_price, buy_qty)
 
     # SELL
-    st.write("### Sell Transaction")
+    st.write("### Vente")
     existing_stocks = df[df["valeur"] != "Cash"]["valeur"].unique().tolist()
-    sell_stock = st.selectbox(f"Stock to SELL for {client_name}", existing_stocks, key=f"sell_s_{client_name}")
-    sell_price = st.number_input(f"Sell Price for {sell_stock}", min_value=0.0, value=0.0, step=0.01, key=f"sell_price_{client_name}")
-    sell_qty   = st.number_input(f"Sell Quantity for {sell_stock}", min_value=1.0, value=1.0, step=0.01, key=f"sell_qty_{client_name}")
+    sell_stock = st.selectbox(f"Valeur a vendre pour {client_name}", existing_stocks, key=f"sell_s_{client_name}")
+    sell_price = st.number_input(f"Prix de vente de {sell_stock}", min_value=0.0, value=0.0, step=0.01, key=f"sell_price_{client_name}")
+    sell_qty   = st.number_input(f"Quantité de {sell_stock}", min_value=1.0, value=1.0, step=0.01, key=f"sell_qty_{client_name}")
     from logic import sell_shares
-    if st.button(f"SELL {sell_stock}", key=f"sell_btn_{client_name}"):
+    if st.button(f"Vendre {sell_stock}", key=f"sell_btn_{client_name}"):
         sell_shares(client_name, sell_stock, sell_price, sell_qty)
 
 
@@ -279,12 +279,12 @@ def show_portfolio(client_name, read_only=False):
 # 4) View Client Portfolio Page
 ########################################
 def page_view_client_portfolio():
-    st.title("📊 View Client Portfolio")
+    st.title("Portefeuille client")
     c2 = get_all_clients()
     if not c2:
-        st.warning("No clients found. Please create a client first.")
+        st.warning("Aucun client trouvé. veuillez créer un nouveau client.")
     else:
-        client_selected = st.selectbox("Select Client", c2, key="view_portfolio_select")
+        client_selected = st.selectbox("Selectionner le Client", c2, key="view_portfolio_select")
         if client_selected:
             show_portfolio(client_selected, read_only=False)
 
@@ -293,10 +293,10 @@ def page_view_client_portfolio():
 # 5) View All Portfolios Page
 ########################################
 def page_view_all_portfolios():
-    st.title("📊 All Clients' Portfolios")
+    st.title("Vue globale de tout les portefeuilles")
     clients = get_all_clients()
     if not clients:
-        st.warning("No clients found.")
+        st.warning("Pas de clients à afficher.")
         return
     for cname in clients:
         st.write(f"### Client: {cname}")
@@ -308,14 +308,14 @@ def page_view_all_portfolios():
 # 6) Inventory Page
 ########################################
 def page_inventory():
-    st.title("🗃️ Global Inventory")
+    st.title("Inventaire")
 
     from db_utils import get_all_clients, get_portfolio, fetch_stocks
     from collections import defaultdict
 
     clients = get_all_clients()
     if not clients:
-        st.warning("No clients found. Please create a client first.")
+        st.warning("Aucun client trouvé. veuillez créer un nouveau client..")
         return
 
     master_data = defaultdict(lambda: {"quantity": 0.0, "clients": set()})
@@ -338,7 +338,7 @@ def page_inventory():
             overall_portfolio_sum += portfolio_val
 
     if not master_data:
-        st.write("No stocks or cash found in any portfolio.")
+        st.write("Aucun actif disponible dans les portefeuilles client.")
         return
 
     rows_data = []
@@ -373,15 +373,15 @@ def page_inventory():
 # 7) Market Page
 ########################################
 def page_market():
-    st.title("📈 Market")
-    st.write("Below are the current stocks/cash with real-time prices, plus Capitalisation & Poids Masi.")
+    st.title("Marché")
+    st.write("les cours affichées ont un décallage de 15 min.")
 
     from logic import compute_poids_masi
     from db_utils import fetch_stocks
 
     m = compute_poids_masi()
     if not m:
-        st.warning("No instruments found or no matching data. Please check DB.")
+        st.warning("Aucun instrument trouvé, veuillez vérifier la connexion avec la BD et les API.")
         return
 
     rows = []
@@ -408,18 +408,12 @@ def page_market():
 ########################################
 
 def page_performance_fees():
-    """
-    This page manages performance tracking:
-      - You can select a client, add start_date + start_value
-      - The code fetches current portfolio value
-      - Compares => performance% => fees
-      - Also shows a collapsible summary of all clients (their most recent period).
-    """
-    st.title("📈 Performance & Fees")
+    
+    st.title("Performance & Fees")
 
     clients = get_all_clients()
     if not clients:
-        st.warning("No clients found. Create a client first.")
+        st.warning("Aucun client trouvé. veuillez créer un nouveau client..")
         return
 
     client_name = st.selectbox("Select Client", clients, key="perf_fee_select")
