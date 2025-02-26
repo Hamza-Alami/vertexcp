@@ -80,12 +80,12 @@ def show_portfolio(client_name, read_only=False):
     """
     cid = db_utils.get_client_id(client_name)  # <--- fully-qualified call
     if cid is None:
-        st.warning("Client not found.")
+        st.warning("Client introuvable.")
         return
 
     df = db_utils.get_portfolio(client_name)   # <--- fully-qualified call
     if df.empty:
-        st.warning(f"No portfolio found for '{client_name}'")
+        st.warning(f"Aucun portefeuille trouvé pour '{client_name}'")
         return
 
     # fetch current stock prices
@@ -97,7 +97,7 @@ def show_portfolio(client_name, read_only=False):
 
     # Recompute columns 
     for i, row in df.iterrows():
-        val = str(row["valeur"])
+        val = str(row["Valeur"])
         match = stocks[stocks["valeur"] == val]
         live_price = float(match["cours"].values[0]) if not match.empty else 0.0
         df.at[i, "cours"] = live_price
