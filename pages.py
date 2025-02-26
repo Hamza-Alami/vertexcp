@@ -31,7 +31,7 @@ def page_manage_clients():
 
     # Create Client form
     with st.form("add_client_form", clear_on_submit=True):
-        new_client_name = st.text_input("Nom dun nouveau client", key="new_client_input")
+        new_client_name = st.text_input("Nom du nouveau client", key="new_client_input")
         if st.form_submit_button("➕ Créer Client"):
             create_client(new_client_name)
 
