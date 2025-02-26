@@ -55,7 +55,7 @@ def page_manage_clients():
 # 2) Create Portfolio Page
 ########################################
 def page_create_portfolio():
-    st.title("📊 Créer un portefeuille pour")
+    st.title("Créer un portefeuille pour")
     clist = get_all_clients()
     if not clist:
         st.warning("Aucun client disponible, veuillez d'abord créer un client.")
@@ -130,7 +130,7 @@ def show_portfolio(client_name, read_only=False):
     df["__cash_marker"] = df["valeur"].apply(lambda x: 1 if x == "Cash" else 0)
     df.sort_values("__cash_marker", inplace=True, ignore_index=True)
 
-    st.subheader(f"📜 Portfolio for {client_name}")
+    st.subheader(f"Portfolio for {client_name}")
     st.write(f"**Valorisation totale du portefeuille:** {total_val:.2f}")
 
     # If read-only, display a styled table, no editing
