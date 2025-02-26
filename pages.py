@@ -26,28 +26,28 @@ from logic import (
 # 1) Manage Clients Page
 ########################################
 def page_manage_clients():
-    st.title("Gestion Clients")
+    st.title("Gestion des Clients")
     existing = get_all_clients()
 
-    # Create Client form
+    # Créer un nouveau client
     with st.form("add_client_form", clear_on_submit=True):
         new_client_name = st.text_input("Nom du nouveau client", key="new_client_input")
-        if st.form_submit_button("➕ Créer Client"):
+        if st.form_submit_button("➕ Créer le client"):
             create_client(new_client_name)
 
-    # If clients exist, allow rename/delete
+    # Si des clients existent, permettre la modification/suppression
     if existing:
-        # Rename
+        # Renommer un client
         with st.form("rename_client_form", clear_on_submit=True):
-            rename_choice = st.selectbox("Selectionner le client à renommer", options=existing, key="rename_choice")
+            rename_choice = st.selectbox("Sélectionner le client à renommer", options=existing, key="rename_choice")
             rename_new = st.text_input("Nouveau nom du client", key="rename_text")
-            if st.form_submit_button("✏️ Renommer Client"):
+            if st.form_submit_button("✏️ Renommer ce client"):
                 rename_client(rename_choice, rename_new)
 
-        # Delete
+        # Supprimer un client
         with st.form("delete_client_form", clear_on_submit=True):
-            delete_choice = st.selectbox("Selectionner le client à supprimer", options=existing, key="delete_choice")
-            if st.form_submit_button("🗑️ Supprimer Client"):
+            delete_choice = st.selectbox("Sélectionner le client à supprimer", options=existing, key="delete_choice")
+            if st.form_submit_button("🗑️ Supprimer ce client"):
                 delete_client(delete_choice)
 
 
@@ -55,47 +55,46 @@ def page_manage_clients():
 # 2) Create Portfolio Page
 ########################################
 def page_create_portfolio():
-    st.title("Créer un portefeuille pour")
+    st.title("Création d'un Portefeuille Client")
     clist = get_all_clients()
     if not clist:
-        st.warning("Aucun client disponible, veuillez d'abord créer un client.")
+        st.warning("Aucun client trouvé. Veuillez d'abord créer un client.")
     else:
-        cselect = st.selectbox("Selectionner Client", clist, key="create_pf_select")
+        cselect = st.selectbox("Sélectionner un client", clist, key="create_pf_select")
         if cselect:
-            # check if client already has a portfolio
+            # vérifier si le client a déjà un portefeuille
             if client_has_portfolio(cselect):
-                st.warning(f" Le Client '{cselect}' a déja un portefeuille.")
+                st.warning(f"Le client '{cselect}' dispose déjà d'un portefeuille.")
             else:
                 new_portfolio_creation_ui(cselect)
 
 
 ########################################
-# 3) Show Single Portfolio
+# 3) Afficher le portefeuille d'un client
 ########################################
 def show_portfolio(client_name, read_only=False):
     """
-    Displays a single client's portfolio, either read_only or in full editing mode.
-    Moved from the original single-file code. 
-    Now references db_utils.get_client_id, db_utils.get_portfolio to avoid overshadowing.
+    Affiche le portefeuille d'un client, en mode lecture seule ou avec possibilités d'édition.
+    Appelle db_utils.get_client_id et db_utils.get_portfolio pour éviter les conflits.
     """
-    cid = db_utils.get_client_id(client_name)  # <--- fully-qualified call
+    cid = db_utils.get_client_id(client_name)
     if cid is None:
         st.warning("Client introuvable.")
         return
 
-    df = db_utils.get_portfolio(client_name)   # <--- fully-qualified call
+    df = db_utils.get_portfolio(client_name)
     if df.empty:
-        st.warning(f"Aucun portefeuille trouvé pour '{client_name}'")
+        st.warning(f"Aucun portefeuille trouvé pour « {client_name} ».")
         return
 
-    # fetch current stock prices
+    # Récupérer les cours
     stocks = db_utils.fetch_stocks()
 
     df = df.copy()
     if "quantité" in df.columns:
         df["quantité"] = df["quantité"].astype(float)
 
-    # Recompute columns 
+    # Recalculer les colonnes
     for i, row in df.iterrows():
         val = str(row["valeur"])
         match = stocks[stocks["valeur"] == val]
@@ -113,7 +112,7 @@ def show_portfolio(client_name, read_only=False):
 
         df.at[i, "performance_latente"] = round(val_ - cost_, 2)
 
-        # Poids Masi: if "Cash" => 0, else from poids_masi_map
+        # Poids Masi: 0 pour le cash, sinon on puise dans poids_masi_map
         if val == "Cash":
             df.at[i, "poids_masi"] = 0.0
         else:
@@ -126,14 +125,14 @@ def show_portfolio(client_name, read_only=False):
     else:
         df["poids"] = 0.0
 
-    # ensure "Cash" is at bottom
+    # Mettre "Cash" en bas
     df["__cash_marker"] = df["valeur"].apply(lambda x: 1 if x == "Cash" else 0)
     df.sort_values("__cash_marker", inplace=True, ignore_index=True)
 
-    st.subheader(f"Portfolio for {client_name}")
-    st.write(f"**Valorisation totale du portefeuille:** {total_val:.2f}")
+    st.subheader(f"Portefeuille de {client_name}")
+    st.write(f"**Valorisation totale du portefeuille :** {total_val:,.2f}")
 
-    # If read-only, display a styled table, no editing
+    # Mode lecture seule : juste un tableau stylisé
     if read_only:
         drop_cols = ["id", "client_id", "is_cash", "__cash_marker"]
         for c in drop_cols:
@@ -141,7 +140,7 @@ def show_portfolio(client_name, read_only=False):
                 df.drop(columns=c, inplace=True)
 
         columns_display = [
-            "valeur", "quantité", "vwap", "cours", 
+            "valeur", "quantité", "vwap", "cours",
             "cost_total", "valorisation", "performance_latente",
             "poids", "poids_masi"
         ]
@@ -149,9 +148,9 @@ def show_portfolio(client_name, read_only=False):
         df_display = df[avail_cols].copy()
 
         def color_perf(x):
-            if isinstance(x, (float,int)) and x > 0:
+            if isinstance(x, (float, int)) and x > 0:
                 return "color:green;"
-            elif isinstance(x, (float,int)) and x < 0:
+            elif isinstance(x, (float, int)) and x < 0:
                 return "color:red;"
             return ""
 
@@ -161,16 +160,17 @@ def show_portfolio(client_name, read_only=False):
             return ["" for _ in row]
 
         df_styled = df_display.style.format(
-            "{:.2f}",
-            subset=["quantité","vwap","cours","cost_total","valorisation","performance_latente","poids","poids_masi"]
+            "{:,.2f}",  # 2 décimales + séparateur de milliers
+            subset=["quantité","vwap","cours","cost_total","valorisation",
+                    "performance_latente","poids","poids_masi"]
         ).applymap(color_perf, subset=["performance_latente"]) \
          .apply(bold_cash, axis=1)
 
         st.dataframe(df_styled, use_container_width=True)
         return
 
-    # If not read_only => full editing features (commissions, buy/sell, etc.)
-    with st.expander(f"Modifier les Comissions/Taxes/Fees pour {client_name}", expanded=False):
+    # Mode édition
+    with st.expander(f"Modifier Commissions / Taxes / Frais pour {client_name}", expanded=False):
         cinfo = db_utils.get_client_info(client_name)
         if cinfo:
             exch = float(cinfo.get("exchange_commission_rate") or 0.0)
@@ -179,24 +179,24 @@ def show_portfolio(client_name, read_only=False):
             tax  = float(cinfo.get("tax_on_gains_rate") or 15.0)
 
             new_exch = st.number_input(
-                f"Commission d'intermediation (%) - {client_name}", 
+                f"Commission d'intermédiation (%) - {client_name}",
                 min_value=0.0, value=exch, step=0.01, key=f"exch_{client_name}"
             )
             new_mgmt = st.number_input(
-                f"Frais de gestion (%) - {client_name}", 
+                f"Frais de gestion (%) - {client_name}",
                 min_value=0.0, value=mgf, step=0.01, key=f"mgf_{client_name}"
             )
             new_pea  = st.checkbox(
-                f"Le {client_name} a un compte PEA ?",
-                value=pea, 
+                f"Compte PEA pour {client_name} ?",
+                value=pea,
                 key=f"pea_{client_name}"
             )
             new_tax = st.number_input(
-                f"TPCVM (%) - {client_name}", 
+                f"Taux d'imposition sur les gains (%) - {client_name}",
                 min_value=0.0, value=tax, step=0.01, key=f"tax_{client_name}"
             )
 
-            if st.button(f"Modifier les commissions du client - {client_name}", key=f"update_rates_{client_name}"):
+            if st.button(f"Mettre à jour les paramètres pour {client_name}", key=f"update_rates_{client_name}"):
                 update_client_rates(client_name, new_exch, new_pea, new_tax, new_mgmt)
 
     columns_display = [
@@ -208,7 +208,7 @@ def show_portfolio(client_name, read_only=False):
     def color_perf(x):
         if isinstance(x, (float,int)) and x > 0:
             return "color:green;"
-        elif isinstance(x, (float,int)) and x < 0:
+        elif isinstance(x,(float,int)) and x < 0:
             return "color:red;"
         return ""
 
@@ -218,18 +218,16 @@ def show_portfolio(client_name, read_only=False):
         return ["" for _ in row]
 
     df_styled = df.drop(columns="__cash_marker").style.format(
-        "{:.2f}",
-        subset=[
-            "quantité","vwap","cours","cost_total",
-            "valorisation","performance_latente","poids_masi","poids"
-        ]
+        "{:,.2f}",  # 2 décimales + séparateur de milliers
+        subset=["quantité","vwap","cours","cost_total",
+                "valorisation","performance_latente","poids_masi","poids"]
     ).applymap(color_perf, subset=["performance_latente"]) \
      .apply(bold_cash, axis=1)
 
-    st.write("#### Current Holdings (Poids Masi shown, 0% if Cash)")
+    st.write("#### Actifs actuels du portefeuille (Poids Masi à 0% pour Cash)")
     st.dataframe(df_styled, use_container_width=True)
 
-    with st.expander("Edition manuelle du portefeuille  (Qté / CMP)", expanded=False):
+    with st.expander("Édition manuelle du portefeuille (Quantité / VWAP)", expanded=False):
         edit_cols = ["valeur","quantité","vwap"]
         edf = df[edit_cols].drop(columns="__cash_marker", errors="ignore").copy()
         updated_df = st.data_editor(
@@ -237,7 +235,7 @@ def show_portfolio(client_name, read_only=False):
             use_container_width=True,
             key=f"portfolio_editor_{client_name}",
         )
-        if st.button(f"💾 Enregsiter les modifications pour {client_name}", key=f"save_edits_btn_{client_name}"):
+        if st.button(f"💾 Enregistrer les modifications pour {client_name}", key=f"save_edits_btn_{client_name}"):
             from db_utils import portfolio_table
             cid2 = db_utils.get_client_id(client_name)
             for idx, row2 in updated_df.iterrows():
@@ -250,53 +248,53 @@ def show_portfolio(client_name, read_only=False):
                         "vwap": vw
                     }).eq("client_id", cid2).eq("valeur", valn).execute()
                 except Exception as e:
-                    st.error(f"Erreur dans la savegarde des modifications {valn}: {e}")
-            st.success(f"Portefeuille actualisé avec succés '{client_name}'!")
+                    st.error(f"Erreur lors de la sauvegarde pour {valn}: {e}")
+            st.success(f"Portefeuille de « {client_name} » mis à jour avec succès!")
             st.rerun()
 
-    # BUY
-    st.write("### Achat")
+    # ACHAT
+    st.write("### Opération d'Achat")
     from logic import buy_shares
     _stocks = db_utils.fetch_stocks()
-    buy_stock = st.selectbox(f"Valeur a acheter pour {client_name}", _stocks["valeur"].tolist(), key=f"buy_s_{client_name}")
-    buy_price = st.number_input(f"Prix d'achat de {buy_stock}", min_value=0.0, value=0.0, step=0.01, key=f"buy_price_{client_name}")
-    buy_qty   = st.number_input(f"Quantité de {buy_stock}", min_value=1.0, value=1.0, step=0.01, key=f"buy_qty_{client_name}")
+    buy_stock = st.selectbox(f"Choisir la valeur à acheter pour {client_name}", _stocks["valeur"].tolist(), key=f"buy_s_{client_name}")
+    buy_price = st.number_input(f"Prix d'achat pour {buy_stock}", min_value=0.0, value=0.0, step=0.01, key=f"buy_price_{client_name}")
+    buy_qty   = st.number_input(f"Quantité à acheter pour {buy_stock}", min_value=1.0, value=1.0, step=0.01, key=f"buy_qty_{client_name}")
     if st.button(f"Acheter {buy_stock}", key=f"buy_btn_{client_name}"):
         buy_shares(client_name, buy_stock, buy_price, buy_qty)
 
-    # SELL
-    st.write("### Vente")
+    # VENTE
+    st.write("### Opération de Vente")
     existing_stocks = df[df["valeur"] != "Cash"]["valeur"].unique().tolist()
-    sell_stock = st.selectbox(f"Valeur a vendre pour {client_name}", existing_stocks, key=f"sell_s_{client_name}")
-    sell_price = st.number_input(f"Prix de vente de {sell_stock}", min_value=0.0, value=0.0, step=0.01, key=f"sell_price_{client_name}")
-    sell_qty   = st.number_input(f"Quantité de {sell_stock}", min_value=1.0, value=1.0, step=0.01, key=f"sell_qty_{client_name}")
+    sell_stock = st.selectbox(f"Choisir la valeur à vendre pour {client_name}", existing_stocks, key=f"sell_s_{client_name}")
+    sell_price = st.number_input(f"Prix de vente pour {sell_stock}", min_value=0.0, value=0.0, step=0.01, key=f"sell_price_{client_name}")
+    sell_qty   = st.number_input(f"Quantité à vendre pour {sell_stock}", min_value=1.0, value=1.0, step=0.01, key=f"sell_qty_{client_name}")
     from logic import sell_shares
     if st.button(f"Vendre {sell_stock}", key=f"sell_btn_{client_name}"):
         sell_shares(client_name, sell_stock, sell_price, sell_qty)
 
 
 ########################################
-# 4) View Client Portfolio Page
+# 4) Voir le portefeuille d'un client
 ########################################
 def page_view_client_portfolio():
-    st.title("Portefeuille client")
+    st.title("Portefeuille d'un Client")
     c2 = get_all_clients()
     if not c2:
-        st.warning("Aucun client trouvé. veuillez créer un nouveau client.")
+        st.warning("Aucun client trouvé. Veuillez créer un client.")
     else:
-        client_selected = st.selectbox("Selectionner le Client", c2, key="view_portfolio_select")
+        client_selected = st.selectbox("Sélectionner un client", c2, key="view_portfolio_select")
         if client_selected:
             show_portfolio(client_selected, read_only=False)
 
 
 ########################################
-# 5) View All Portfolios Page
+# 5) Voir tous les portefeuilles
 ########################################
 def page_view_all_portfolios():
-    st.title("Vue globale de tout les portefeuilles")
+    st.title("Vue Globale de Tous les Portefeuilles")
     clients = get_all_clients()
     if not clients:
-        st.warning("Pas de clients à afficher.")
+        st.warning("Aucun client n'est disponible.")
         return
     for cname in clients:
         st.write(f"### Client: {cname}")
@@ -305,17 +303,17 @@ def page_view_all_portfolios():
 
 
 ########################################
-# 6) Inventory Page
+# 6) Inventaire
 ########################################
 def page_inventory():
-    st.title("Inventaire")
+    st.title("Inventaire des Actifs")
 
     from db_utils import get_all_clients, get_portfolio, fetch_stocks
     from collections import defaultdict
 
     clients = get_all_clients()
     if not clients:
-        st.warning("Aucun client trouvé. veuillez créer un nouveau client..")
+        st.warning("Aucun client n'est disponible. Veuillez créer un client.")
         return
 
     master_data = defaultdict(lambda: {"quantity": 0.0, "clients": set()})
@@ -338,7 +336,7 @@ def page_inventory():
             overall_portfolio_sum += portfolio_val
 
     if not master_data:
-        st.write("Aucun actif disponible dans les portefeuilles client.")
+        st.write("Aucun actif trouvé dans les portefeuilles clients.")
         return
 
     rows_data = []
@@ -362,26 +360,31 @@ def page_inventory():
             row["poids"] = 0.0
 
     inv_df = pd.DataFrame(rows_data)
-    st.dataframe(
-        inv_df[["valeur","quantité total","valorisation","poids","portefeuille"]],
-        use_container_width=True
+    # Format the numeric columns with 2 decimals + thousand separators
+    styled_inv = inv_df.style.format(
+        {
+            "quantité total": "{:,.2f}",
+            "valorisation": "{:,.2f}",
+            "poids": "{:,.2f}"
+        }
     )
-    st.write(f"### Actif sous gestion: {overall_portfolio_sum:.2f}")
+    st.dataframe(styled_inv, use_container_width=True)
+    st.write(f"### Actif sous gestion: {overall_portfolio_sum:,.2f}")
 
 
 ########################################
-# 7) Market Page
+# 7) Page du Marché
 ########################################
 def page_market():
-    st.title("Marché")
-    st.write("les cours affichées ont un décallage de 15 min.")
+    st.title("Marché Boursier")
+    st.write("Les cours affichés peuvent présenter un décalage d'environ 15 minutes.")
 
     from logic import compute_poids_masi
     from db_utils import fetch_stocks
 
     m = compute_poids_masi()
     if not m:
-        st.warning("Aucun instrument trouvé, veuillez vérifier la connexion avec la BD et les API.")
+        st.warning("Aucun instrument trouvé, vérifiez la base de données et l'API.")
         return
 
     rows = []
@@ -394,144 +397,135 @@ def page_market():
         })
     df_market = pd.DataFrame(rows)
     df_market = pd.merge(df_market, stocks, on="valeur", how="left")
-    df_market.rename(columns={"cours":"Cours"}, inplace=True)
-    df_market = df_market[["valeur","Cours","Capitalisation","Poids Masi"]]
+    df_market.rename(columns={"cours": "Cours"}, inplace=True)
+    df_market = df_market[["valeur", "Cours", "Capitalisation", "Poids Masi"]]
 
+    # Format with thousand separators + 2 decimals
     df_styled = df_market.style.format(
-        subset=["Cours","Capitalisation","Poids Masi"],
-        formatter="{:.2f}"
+        {
+            "Cours": "{:,.2f}",
+            "Capitalisation": "{:,.2f}",
+            "Poids Masi": "{:,.2f}"
+        }
     )
     st.dataframe(df_styled, use_container_width=True)
 
-########################################
-#  Performance & Fees Page
-########################################
 
+########################################
+# 8) Page Performance & Fees
+########################################
 def page_performance_fees():
-    
-    st.title("Performance & Fees")
+    st.title("Performance et Frais")
 
     clients = get_all_clients()
     if not clients:
-        st.warning("Aucun client trouvé. veuillez créer un nouveau client..")
+        st.warning("Aucun client trouvé. Veuillez créer un client.")
         return
 
-    client_name = st.selectbox("Select Client", clients, key="perf_fee_select")
+    client_name = st.selectbox("Sélectionner un client", clients, key="perf_fee_select")
     if not client_name:
-        st.info("Pick a client to continue.")
+        st.info("Veuillez choisir un client pour continuer.")
         return
 
     cid = db_utils.get_client_id(client_name)
     if cid is None:
-        st.error("No valid client selected.")
+        st.error("Client non valide.")
         return
 
-    # 1) Let user add / update a performance period
-    with st.expander("Add or Update Start Date / Start Value"):
-
+    # 1) Ajouter / mettre à jour la période de performance
+    with st.expander("Ajouter ou modifier la Date de Début / la Valeur de Départ"):
         with st.form("perf_period_form", clear_on_submit=True):
-            start_date_input = st.date_input("Start Date")
-            start_value_input = st.number_input("Start Value", min_value=0.0, step=0.01, value=0.0)
-            submitted = st.form_submit_button("Save Performance Period")
+            start_date_input = st.date_input("Date de Début")
+            start_value_input = st.number_input("Valeur de Départ", min_value=0.0, step=0.01, value=0.0)
+            submitted = st.form_submit_button("Enregistrer la période de performance")
             if submitted:
-            # Insert a row in performance_periods
-            # Convert date_input to string 'YYYY-MM-DD'
                 start_date_str = str(start_date_input)
                 db_utils.create_performance_period(cid, start_date_str, float(start_value_input))
 
-    # 2) Show all performance_period rows for that client
-    with st.expander("### Existing Performance Periods"):
+    # 2) Afficher toutes les périodes existantes de ce client
+    with st.expander("Périodes de Performance Existantes"):
         df_periods = db_utils.get_performance_periods_for_client(cid)
         if df_periods.empty:
-            st.info("No performance periods found for this client yet.")
+            st.info("Aucune période de performance trouvée pour ce client.")
         else:
-        # we can display them in descending date order
             st.dataframe(df_periods[["start_date","start_value","created_at"]], use_container_width=True)
 
-    # 3) Let user pick which "start_date" row to compare for the performance
-    with st.expander("Compute Performance & Fees for a Chosen Start Date"):
+    # 3) Permettre de choisir une "start_date" pour calculer la performance
+    with st.expander("Calculer la Performance et les Frais à partir d'une Date de Début"):
         if not df_periods.empty:
-        # sort by start_date descending
             df_periods = df_periods.sort_values("start_date", ascending=False)
             start_options = df_periods["start_date"].unique().tolist()
-            selected_start_date = st.selectbox("Select a Start Date for Performance Calculation",
-                                              start_options, key="calc_perf_startdate")
+            selected_start_date = st.selectbox(
+                "Choisir la date de départ pour le calcul de performance",
+                start_options,
+                key="calc_perf_startdate"
+            )
             row_chosen = df_periods[df_periods["start_date"] == selected_start_date].iloc[0]
             chosen_start_value = float(row_chosen["start_value"])
-        
-        # 4) fetch client's current total portfolio value
+
+            # Récupérer la valeur du portefeuille
             df_portfolio = db_utils.get_portfolio(client_name)
             if df_portfolio.empty:
-                st.warning("Client has no portfolio.")
+                st.warning("Ce client ne possède aucun portefeuille.")
             else:
-            # sum up 'valorisation' if you have it, or compute as in show_portfolio
-            # We'll do a simpler approach: just reuse code or logic:
                 from db_utils import fetch_stocks
                 stocks_df = fetch_stocks()
 
-            # compute total_value
                 total_val = 0.0
                 for _, prow in df_portfolio.iterrows():
                     val = str(prow["valeur"])
-                    match = stocks_df[stocks_df["valeur"]==val]
+                    match = stocks_df[stocks_df["valeur"] == val]
                     live_price = float(match["cours"].values[0]) if not match.empty else 0.0
                     qty_ = float(prow["quantité"])
-                    val_ = qty_ * live_price
-                    total_val += val_
+                    total_val += (qty_ * live_price)
 
-            # 5) performance% = (total_val - chosen_start_value) / chosen_start_value * 100
-                if chosen_start_value>0:
+                if chosen_start_value > 0:
                     gains = total_val - chosen_start_value
-                    performance_pct = (gains / chosen_start_value)*100.0
+                    performance_pct = (gains / chosen_start_value) * 100.0
                 else:
                     gains = 0.0
                     performance_pct = 0.0
 
-            # 6) mgmt_fee = Gains * mgmt_fee_rate, where mgmt_fee_rate is from client info
                 cinfo = db_utils.get_client_info(client_name)
-                mgmt_rate = float(cinfo.get("management_fee_rate",0.0))/100.0
-            # If you want fees only if gains>0, you can do max(gains,0).
+                mgmt_rate = float(cinfo.get("management_fee_rate", 0.0)) / 100.0
                 fees_owed = gains * mgmt_rate
-                if fees_owed<0:
-                # you can set to 0 if you don't charge negative fees
+                if fees_owed < 0:
                     fees_owed = 0.0
 
-            # display results
-                st.write(f"**Start Value**: {chosen_start_value:,.2f}")
-                st.write(f"**Current Value**: {total_val:,.2f}")
+                st.write(f"**Valeur de Départ**: {chosen_start_value:,.2f}")
+                st.write(f"**Valeur Actuelle**: {total_val:,.2f}")
                 st.write(f"**Performance %**: {performance_pct:,.2f}%")
                 st.write(f"**Gains**: {gains:,.2f}")
-                st.write(f"**Mgmt Fee Rate**: {cinfo.get('management_fee_rate',0)}%")
-                st.write(f"**Fees Owed**: {fees_owed:,.2f}")
+                st.write(f"**Taux de frais de gestion**: {cinfo.get('management_fee_rate',0)}%")
+                st.write(f"**Frais à payer**: {fees_owed:,.2f}")
 
-    # 7) Collapsible summary => all clients' most recent start date
-    with st.expander("Résumé de Performance (all clients)"):
-        # We want the "latest" row from performance_periods for each client
+    # 4) Résumé de Performance (tous les clients)
+    with st.expander("Résumé de Performance (tous les clients)"):
         df_latest = db_utils.get_latest_performance_period_for_all_clients()
         if df_latest.empty:
-            st.info("No performance data found for any client.")
+            st.info("Aucune donnée de performance pour aucun client.")
         else:
-            # We'll build a small table: client_name, start_date, start_value, current_value, performance%, fees
             summary_rows = []
             from db_utils import fetch_stocks
-    
             stocks_df = fetch_stocks()
-    
+
+            clients_list = get_all_clients()  # to cross-ref with c_id
+
             for _, rrow in df_latest.iterrows():
                 c_id = rrow["client_id"]
                 start_val = float(rrow["start_value"])
                 ddate = str(rrow["start_date"])
-    
-                # find client name
+
+                # Retrouver le nom du client via c_id
                 cinfo2 = None
-                for cname2 in clients:
+                for cname2 in clients_list:
                     if db_utils.get_client_id(cname2) == c_id:
                         cinfo2 = cname2
                         break
                 if not cinfo2:
                     continue
-    
-                # compute currentValue
+
+                # calculer la valeur courante
                 pdf = db_utils.get_portfolio(cinfo2)
                 cur_val = 0.0
                 if not pdf.empty:
@@ -539,52 +533,57 @@ def page_performance_fees():
                         val2 = str(prow2["valeur"])
                         mm = stocks_df[stocks_df["valeur"] == val2]
                         lp = float(mm["cours"].values[0]) if not mm.empty else 0.0
-                        cur_val += float(prow2["quantité"]) * lp
-    
-                # performance
+                        cur_val += (float(prow2["quantité"]) * lp)
+
                 if start_val > 0:
                     gains2 = cur_val - start_val
                     perf2 = (gains2 / start_val) * 100.0
                 else:
                     gains2 = 0.0
                     perf2 = 0.0
-    
-                # mgmt fee
+
                 cinfo_db = db_utils.get_client_info(cinfo2)
                 mgmtr = float(cinfo_db.get("management_fee_rate", 0)) / 100.0
                 fees2 = gains2 * mgmtr
                 if fees2 < 0:
                     fees2 = 0.0
-    
+
                 summary_rows.append({
                     "Client": cinfo2,
-                    "Start Date": ddate,
-                    "Start Value": start_val,
-                    "Current Value": cur_val,
+                    "Date de Début": ddate,
+                    "Valeur de Départ": start_val,
+                    "Valeur Actuelle": cur_val,
                     "Performance %": perf2,
-                    "Fees": fees2
+                    "Frais (Fees)": fees2
                 })
-    
-            # Now that we're done building summary_rows for all clients, let's display:
+
             if not summary_rows:
-                st.info("No valid data to show.")
+                st.info("Aucune donnée valide à afficher.")
             else:
                 df_sum = pd.DataFrame(summary_rows)
-                st.dataframe(df_sum, use_container_width=True)
-    
-                # ===== Add totals in a single-row table =====
-                total_start_val = df_sum["Start Value"].sum()
-                total_cur_val   = df_sum["Current Value"].sum()
-                total_fees      = df_sum["Fees"].sum()
-    
-                # Create a one-row DataFrame for totals
+                # Format the columns with thousand separators + 2 decimals
+                styled_sum = df_sum.style.format(
+                    {
+                        "Valeur de Départ": "{:,.2f}",
+                        "Valeur Actuelle": "{:,.2f}",
+                        "Performance %": "{:,.2f}",
+                        "Frais (Fees)": "{:,.2f}"
+                    }
+                )
+                st.dataframe(styled_sum, use_container_width=True)
+
+                # Calculer et afficher le total
+                total_start_val = df_sum["Valeur de Départ"].sum()
+                total_cur_val   = df_sum["Valeur Actuelle"].sum()
+                total_fees      = df_sum["Frais (Fees)"].sum()
+
                 totals_df = pd.DataFrame([{
-                    "Start Value (Total)": total_start_val,
-                    "Current Value (Total)": total_cur_val,
-                    "Fees (Total)": total_fees,
+                    "Valeur de Départ (Total)": total_start_val,
+                    "Valeur Actuelle (Total)": total_cur_val,
+                    "Frais (Total)": total_fees,
                 }])
-    
-                st.write("#### Totals")
+
+                st.write("#### Totaux Globaux")
                 st.dataframe(
                     totals_df.style.format("{:,.2f}"),
                     use_container_width=True
