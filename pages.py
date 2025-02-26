@@ -92,7 +92,7 @@ def show_portfolio(client_name, read_only=False):
 
     df = df.copy()
     if "quantité" in df.columns:
-        df["quantité"] = df["quantité"].astype(float)
+        df["quantité"] = df["quantité"].astype('int64')
 
     # Recalculer les colonnes
     for i, row in df.iterrows():
