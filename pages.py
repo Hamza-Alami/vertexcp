@@ -101,7 +101,7 @@ def show_portfolio(client_name, read_only=False):
         live_price = float(match["cours"].values[0]) if not match.empty else 0.0
         df.at[i, "cours"] = live_price
 
-        qty_ = float(row["quantité"])
+        qty_ = int(row["quantité"])
         vw_  = float(row.get("vwap", 0.0))
 
         val_ = round(qty_ * live_price, 2)
