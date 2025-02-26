@@ -141,9 +141,9 @@ def show_portfolio(client_name, read_only=False):
                 df.drop(columns=c, inplace=True)
 
         columns_display = [
-            "valeur", "quantité", "vwap", "cours", 
-            "cost_total", "valorisation", "performance_latente",
-            "poids", "poids_masi"
+            "Valeur", "Quantité", "CMP", "Cours", 
+            "Valorisation intiale", "Valorisation", "Performance latente",
+            "Poids", "Poids masi"
         ]
         avail_cols = [x for x in columns_display if x in df.columns]
         df_display = df[avail_cols].copy()
