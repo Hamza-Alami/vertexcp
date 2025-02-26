@@ -26,28 +26,28 @@ from logic import (
 # 1) Manage Clients Page
 ########################################
 def page_manage_clients():
-    st.title("👤 Manage Clients")
+    st.title("Gestion Clients")
     existing = get_all_clients()
 
     # Create Client form
     with st.form("add_client_form", clear_on_submit=True):
-        new_client_name = st.text_input("New Client Name", key="new_client_input")
-        if st.form_submit_button("➕ Add Client"):
+        new_client_name = st.text_input("Nom dun nouveau client", key="new_client_input")
+        if st.form_submit_button("➕ Créer Client"):
             create_client(new_client_name)
 
     # If clients exist, allow rename/delete
     if existing:
         # Rename
         with st.form("rename_client_form", clear_on_submit=True):
-            rename_choice = st.selectbox("Select Client to Rename", options=existing, key="rename_choice")
-            rename_new = st.text_input("New Client Name", key="rename_text")
-            if st.form_submit_button("✏️ Rename Client"):
+            rename_choice = st.selectbox("Selectionner le client à renommer", options=existing, key="rename_choice")
+            rename_new = st.text_input("Nouveau nom du client", key="rename_text")
+            if st.form_submit_button("✏️ Renommer Client"):
                 rename_client(rename_choice, rename_new)
 
         # Delete
         with st.form("delete_client_form", clear_on_submit=True):
-            delete_choice = st.selectbox("Select Client to Delete", options=existing, key="delete_choice")
-            if st.form_submit_button("🗑️ Delete Client"):
+            delete_choice = st.selectbox("Selectionner le client à supprimer", options=existing, key="delete_choice")
+            if st.form_submit_button("🗑️ Supprimer Client"):
                 delete_client(delete_choice)
 
 
@@ -55,16 +55,16 @@ def page_manage_clients():
 # 2) Create Portfolio Page
 ########################################
 def page_create_portfolio():
-    st.title("📊 Create Client Portfolio")
+    st.title("📊 Créer un portefeuille pour")
     clist = get_all_clients()
     if not clist:
-        st.warning("No clients found. Please create a client first.")
+        st.warning("Aucun client disponible, veuillez d'abord créer un client.")
     else:
-        cselect = st.selectbox("Select Client", clist, key="create_pf_select")
+        cselect = st.selectbox("Selectionner Client", clist, key="create_pf_select")
         if cselect:
             # check if client already has a portfolio
             if client_has_portfolio(cselect):
-                st.warning(f"Client '{cselect}' already has a portfolio. Go to 'View Client Portfolio' to edit.")
+                st.warning(f" Le Client '{cselect}' a déja un portefeuille.")
             else:
                 new_portfolio_creation_ui(cselect)
 
