@@ -14,26 +14,26 @@ def main():
     page = st.sidebar.selectbox(
         "📂 Navigation",
         [
-            "Manage Clients",
-            "Create Portfolio",
-            "View Client Portfolio",
-            "View All Portfolios",
-            "Inventory",
-            "Market",
+            "Gestion des clients",
+            "Créer un Portefeuille",
+            "Gérer un Portefeuille",
+            "Voir tout les portefeuilles",
+            "Inventaire",
+            "Marché",
             "Performance & Fees"  # Add new
         ]
     )
-    if page == "Manage Clients":
+    if page == "Gestion des clients":
         page_manage_clients()
-    elif page == "Create Portfolio":
+    elif page == "Créer un Portefeuille":
         page_create_portfolio()
-    elif page == "View Client Portfolio":
+    elif page == "Gérer un Portefeuille":
         page_view_client_portfolio()
-    elif page == "View All Portfolios":
+    elif page == "Voir tout les portefeuilles":
         page_view_all_portfolios()
-    elif page == "Inventory":
+    elif page == "Inventaire":
         page_inventory()
-    elif page == "Market":
+    elif page == "Marché":
         page_market()
     elif page == "Performance & Fees":
         page_performance_fees()  # call new function
