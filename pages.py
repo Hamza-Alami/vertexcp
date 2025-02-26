@@ -97,7 +97,7 @@ def show_portfolio(client_name, read_only=False):
 
     # Recompute columns 
     for i, row in df.iterrows():
-        val = str(row["Valeur"])
+        val = str(row["valeur"])
         match = stocks[stocks["valeur"] == val]
         live_price = float(match["cours"].values[0]) if not match.empty else 0.0
         df.at[i, "cours"] = live_price
