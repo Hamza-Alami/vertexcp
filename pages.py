@@ -296,7 +296,7 @@ def page_performance_fees():
     if st.button("Enregistrer modifications des périodes"):
         update_performance_period_rows(df_periods, updated_periods)
         st.success("Modifications enregistrées avec succès!")
-        st.experimental_rerun()
+        st.rerun()
 
     st.subheader("Calculer la Performance sur une Période")
     if not updated_periods.empty:
