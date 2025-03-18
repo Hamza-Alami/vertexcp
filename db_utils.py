@@ -1,16 +1,17 @@
 # db_utils.py
+
 import pandas as pd
 import streamlit as st
 import requests
 from db_connection import get_supabase_client
-from typing import Optional
+from datetime import date, datetime
 
 ##################################################
 #            Supabase Client & Helpers
 ##################################################
 
 def get_supabase():
-    """Return a global Supabase client from db_connection."""
+    """Return the Supabase client from a global connection."""
     return get_supabase_client()
 
 def client_table():
@@ -29,17 +30,18 @@ def performance_table():
 #               MASI Fetch
 ##################################################
 
-def fetch_masi_from_cb() -> float:
+def fetch_masi_from_cb():
     """
-    Fetch MASI index from Casablanca Bourse,
-    searching under 'Principaux indices' for 'MASI'.
-    Returns 0.0 if not found or on error.
+    Fetches JSON from Casablanca Bourse for 'Principaux indices'
+    and returns the current MASI index value as float.
+    If not found, returns 0.0 (or logs an error).
     """
     url = "https://www.casablanca-bourse.com/api/proxy/fr/api/bourse/dashboard/grouped_index_watch?"
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        # data = { "data": [ { "title": "...", "items": [...] }, ... ] }
         for block in data.get("data", []):
             if block.get("title") == "Principaux indices":
                 for item in block.get("items", []):
@@ -48,102 +50,108 @@ def fetch_masi_from_cb() -> float:
                         return float(val_str)
         return 0.0
     except Exception as e:
-        print("Error fetching MASI from Casablanca Bourse:", e)
+        print("Error fetching MASI index from Casablanca Bourse:", e)
         return 0.0
 
 ##################################################
-#           Fetching Stocks & Instruments
+#       Fetching Stocks & Instruments
 ##################################################
 
 @st.cache_data(ttl=60)
-def _cached_fetch_stocks() -> pd.DataFrame:
+def _cached_fetch_stocks():
     """
-    Actually fetch from IDBourse API, returning DataFrame [valeur, cours],
-    with an extra row for 'Cash' at cours=1.
+    Actually fetch from IDBourse API, returning a DataFrame with columns: [valeur, cours].
+    Adds a 'Cash' row with cours=1.
     """
     try:
-        r = requests.get("https://backend.idbourse.com/api_2/get_all_data", timeout=10)
-        r.raise_for_status()
-        data = r.json()
+        response = requests.get("https://backend.idbourse.com/api_2/get_all_data", timeout=10)
+        response.raise_for_status()
+        data = response.json()
         df = pd.DataFrame(
-            [(s.get("name","N/A"), s.get("dernier_cours", 0)) for s in data],
-            columns=["valeur","cours"]
+            [(s.get("name", "N/A"), s.get("dernier_cours", 0)) for s in data],
+            columns=["valeur", "cours"]
         )
-        # Add Cash row
-        cash = pd.DataFrame([{"valeur":"Cash","cours":1}])
-        df = pd.concat([df, cash], ignore_index=True)
-        return df
+        # Add CASH row
+        cash_row = pd.DataFrame([{"valeur": "Cash", "cours": 1}])
+        return pd.concat([df, cash_row], ignore_index=True)
     except Exception as e:
         st.error(f"Failed to fetch stock data from IDBourse: {e}")
-        return pd.DataFrame(columns=["valeur","cours"])
+        return pd.DataFrame(columns=["valeur", "cours"])
 
-def fetch_stocks() -> pd.DataFrame:
-    """Return the IDBourse stock list, cached for 60s."""
+def fetch_stocks():
+    """Return the 'stocks' DataFrame from the IDBourse API, cached for 60s."""
     return _cached_fetch_stocks()
 
-def fetch_instruments() -> pd.DataFrame:
+def fetch_instruments():
     """
-    Return [instrument_name, nombre_de_titres, facteur_flottant] from 'instruments' table in DB.
+    Return a DataFrame [instrument_name, nombre_de_titres, facteur_flottant]
+    from the 'instruments' Supabase table.
     """
     client = get_supabase()
-    resp = client.table("instruments").select("*").execute()
-    if not resp.data:
+    res = client.table("instruments").select("*").execute()
+    if not res.data:
         return pd.DataFrame(columns=["instrument_name","nombre_de_titres","facteur_flottant"])
-    df = pd.DataFrame(resp.data)
-    needed = ["instrument_name","nombre_de_titres","facteur_flottant"]
-    for c in needed:
-        if c not in df.columns:
-            df[c] = None
-    return df[needed].copy()
+    df = pd.DataFrame(res.data)
+    needed_cols = ["instrument_name","nombre_de_titres","facteur_flottant"]
+    for col in needed_cols:
+        if col not in df.columns:
+            df[col] = None
+    return df[needed_cols].copy()
 
 ##################################################
-#           Client & Portfolio
+#           Client / Portfolio / Performance
 ##################################################
 
-def get_all_clients() -> list[str]:
-    """Return the list of all client names."""
+def get_all_clients():
+    """Return a list of all client names from 'clients' table."""
     res = client_table().select("*").execute()
     if not res.data:
         return []
     return [r["name"] for r in res.data]
 
-def get_client_info(client_name: str) -> Optional[dict]:
+def get_client_info(client_name: str):
     """
-    Return a dict for the client's row or None.
-    Example fields: id, name, exchange_commission_rate, ...
+    Return the client row as a dict:
+    { id, name, exchange_commission_rate, tax_on_gains_rate, 
+      is_pea, management_fee_rate, bill_surperformance, ...}
+    or None if not found.
     """
     res = client_table().select("*").eq("name", client_name).execute()
     if res.data:
         return res.data[0]
     return None
 
-def get_client_id(client_name: str) -> Optional[int]:
+def get_client_id(client_name: str):
+    """Return integer ID for this client or None if not found."""
     cinfo = get_client_info(client_name)
     if not cinfo:
         return None
     return int(cinfo["id"])
 
 def client_has_portfolio(client_name: str) -> bool:
-    """Check if the client has any row in 'portfolios'."""
+    """Check if 'client_name' already has at least one row in 'portfolios'."""
     cid = get_client_id(client_name)
     if cid is None:
         return False
-    res = portfolio_table().select("*").eq("client_id", cid).execute()
-    return len(res.data) > 0
+    port = portfolio_table().select("*").eq("client_id", cid).execute()
+    return len(port.data) > 0
 
 def get_portfolio(client_name: str) -> pd.DataFrame:
-    """Return a DataFrame of that client's portfolio rows."""
+    """Return a DataFrame with portfolio rows for 'client_name'."""
     cid = get_client_id(client_name)
     if cid is None:
         return pd.DataFrame()
-    resp = portfolio_table().select("*").eq("client_id", cid).execute()
-    return pd.DataFrame(resp.data)
+    res = portfolio_table().select("*").eq("client_id", cid).execute()
+    return pd.DataFrame(res.data)
 
 ##################################################
 #        CRUD for Clients & Rates
 ##################################################
 
 def create_client(name: str):
+    """
+    Insert a new client with minimal fields. 
+    """
     if not name:
         st.error("Nom du client invalide.")
         return
@@ -155,6 +163,9 @@ def create_client(name: str):
         st.error(f"Erreur lors de la création du client: {e}")
 
 def rename_client(old_name: str, new_name: str):
+    """
+    Update the 'name' field for an existing client.
+    """
     cid = get_client_id(old_name)
     if cid is None:
         st.error("Client introuvable.")
@@ -167,6 +178,7 @@ def rename_client(old_name: str, new_name: str):
         st.error(f"Erreur lors du renommage: {e}")
 
 def delete_client(cname: str):
+    """Delete a client by name."""
     cid = get_client_id(cname)
     if cid is None:
         st.error("Client introuvable.")
@@ -178,12 +190,20 @@ def delete_client(cname: str):
     except Exception as e:
         st.error(f"Erreur lors de la suppression du client: {e}")
 
-def update_client_rates(client_name: str,
-                        exchange_comm: float,
-                        is_pea: bool,
-                        custom_tax: float,
-                        mgmt_fee: float,
+def update_client_rates(client_name: str, 
+                        exchange_comm: float, 
+                        is_pea: bool, 
+                        custom_tax: float, 
+                        mgmt_fee: float, 
                         bill_surperf: bool):
+    """
+    Update the client's financial parameters:
+      - exchange_commission_rate
+      - tax_on_gains_rate (0 if is_pea=True)
+      - is_pea
+      - management_fee_rate
+      - bill_surperformance => bool
+    """
     cid = get_client_id(client_name)
     if cid is None:
         st.error("Client introuvable.")
@@ -195,124 +215,97 @@ def update_client_rates(client_name: str,
             "tax_on_gains_rate": final_tax,
             "is_pea": bool(is_pea),
             "management_fee_rate": float(mgmt_fee),
-            "bill_surperformance": bool(bill_surperf),
+            "bill_surperformance": bool(bill_surperf)
         }).eq("id", cid).execute()
-
         st.success(f"Paramètres mis à jour pour « {client_name} ».")
         st.experimental_rerun()
     except Exception as e:
         st.error(f"Erreur lors de la mise à jour des taux: {e}")
 
 ##################################################
-#       Performance Periods
+#       Performance Periods (start_value, etc.)
 ##################################################
 
-def create_performance_period(client_id: int,
-                              start_date_str: str,
-                              start_val: float,
+def create_performance_period(client_id: int, 
+                              start_date_str: str, 
+                              start_val: float, 
                               masi_start_value: float):
     """
-    Insert a new row in 'performance_periods':
+    Insert a new row in 'performance_periods'.
+    Fields:
       - client_id
-      - start_date => str
-      - start_value
-      - masi_start_value
+      - start_date => string 'YYYY-MM-DD'
+      - start_value => float
+      - masi_start_value => float
     """
     if not client_id:
         st.error("ID client invalide.")
         return
     try:
-        data = {
+        row_data = {
             "client_id": client_id,
             "start_date": start_date_str,
             "start_value": start_val,
             "masi_start_value": masi_start_value
         }
-        performance_table().insert(data).execute()
+        performance_table().insert(row_data).execute()
     except Exception as e:
         st.error(f"Erreur lors de la création d'une période de performance: {e}")
 
 def get_performance_periods_for_client(client_id: int) -> pd.DataFrame:
-    """All rows from performance_periods for this client, ascending by date."""
-    resp = performance_table().select("*").eq("client_id", client_id).order("start_date", desc=False).execute()
-    if not resp.data:
+    """Return all rows from 'performance_periods' for a given client, sorted by date ascending."""
+    res = performance_table().select("*").eq("client_id", client_id).order("start_date", desc=False).execute()
+    if not res.data:
         return pd.DataFrame()
-    return pd.DataFrame(resp.data)
+    return pd.DataFrame(res.data)
 
 def get_latest_performance_period_for_all_clients() -> pd.DataFrame:
     """
-    For each client_id, pick row with the greatest start_date.
-    Return columns [id, client_id, start_date, start_value, masi_start_value, ...].
+    For each client, pick the row with the max start_date from performance_periods.
+    Return DataFrame with columns: [id, client_id, start_date, start_value, masi_start_value, ...].
     """
-    resp = performance_table().select("*").execute()
-    if not resp.data:
+    res = performance_table().select("*").execute()
+    if not res.data:
         return pd.DataFrame()
-    df = pd.DataFrame(resp.data)
+    df = pd.DataFrame(res.data)
     if df.empty or "start_date" not in df.columns:
         return pd.DataFrame()
 
     df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
-    df.sort_values(["client_id","start_date"], ascending=[True, False], inplace=True)
-    # group => pick top row
-    latest = df.groupby("client_id", as_index=False).head(1)
-    return latest
+    df_sorted = df.sort_values(["client_id", "start_date"], ascending=[True, False])
+    # groupby client_id => top row (most recent date)
+    df_latest = df_sorted.groupby("client_id", as_index=False).head(1)
+    return df_latest
 
 def update_performance_period_rows(old_df: pd.DataFrame, new_df: pd.DataFrame):
     """
-    Compare old_df vs new_df row by row. 
-    Here we assume each row has a unique primary key, e.g. "id". 
-    Then we detect changes in start_date / start_value / masi_start_value, etc.
-
-    We'll do a simple approach:
-      - Match on "id"
-      - If changed => update in DB
+    Compare old_df vs new_df from st.data_editor and apply changes to 'performance_periods'.
+    We'll assume each row has an integer 'id' primary key.
+    Only updates existing rows (no new row insertion or old row deletion here).
     """
-    if "id" not in old_df.columns:
-        st.warning("No 'id' column for performance_periods, can't update reliably.")
-        return
+    # Convert date => string if needed
+    for idx, row in new_df.iterrows():
+        rec_id = row.get("id", None)
+        if rec_id is None:
+            continue  # if there's no ID, skip
+        # We do a simple approach: re-insert start_date as isoformat if it's a date
+        start_dt = row.get("start_date")
+        if isinstance(start_dt, date):
+            start_dt_str = start_dt.isoformat()
+        elif isinstance(start_dt, datetime):
+            start_dt_str = start_dt.date().isoformat()
+        else:
+            start_dt_str = str(start_dt)
 
-    # Convert date columns back to str if needed
-    # In your DB, you might store it as text or date.
-    # We'll store as 'YYYY-MM-DD' text.
-    new_df = new_df.copy()
-    if "start_date" in new_df.columns:
-        new_df["start_date"] = new_df["start_date"].astype(str)
+        new_start_val = float(row.get("start_value", 0))
+        new_masi_val = float(row.get("masi_start_value", 0))
 
-    for index, new_row in new_df.iterrows():
-        row_id = new_row.get("id", None)
-        if pd.isna(row_id):
-            continue
-        # find old row
-        old_match = old_df[old_df["id"]==row_id]
-        if old_match.empty:
-            continue
-
-        old_row = old_match.iloc[0]
-        changed = False
-
-        fields_to_check = ["start_date","start_value","masi_start_value"]
-        updated_data = {}
-        for f in fields_to_check:
-            old_val = old_row.get(f, None)
-            new_val = new_row.get(f, None)
-            # convert to float or str
-            if f=="start_date":
-                if str(old_val)!=str(new_val):
-                    updated_data[f] = str(new_val)
-                    changed = True
-            else:
-                # numeric
-                try:
-                    old_v = float(old_val)
-                    new_v = float(new_val)
-                    if not math.isclose(old_v, new_v, rel_tol=1e-9, abs_tol=1e-9):
-                        updated_data[f] = new_v
-                        changed = True
-                except:
-                    pass
-
-        if changed:
-            try:
-                performance_table().update(updated_data).eq("id", row_id).execute()
-            except Exception as e:
-                st.error(f"Erreur lors de la mise à jour de la période (id={row_id}): {e}")
+        # Attempt an update
+        try:
+            performance_table().update({
+                "start_date": start_dt_str,
+                "start_value": new_start_val,
+                "masi_start_value": new_masi_val
+            }).eq("id", rec_id).execute()
+        except Exception as e:
+            st.error(f"Erreur lors de la mise à jour de la ligne id={rec_id}: {e}")
