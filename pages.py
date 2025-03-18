@@ -477,8 +477,15 @@ def page_market():
 # 8) Page Performance & Fees
 ########################################
 def page_performance_fees():
+    """
+    Page de gestion des performances et des frais,
+    incluant l'édition des périodes existantes et
+    l'ajout de la surperformance MASI.
+    """
+
     st.title("Performance et Frais")
 
+    # 1) Sélection du client
     clients = get_all_clients()
     if not clients:
         st.warning("Aucun client trouvé. Veuillez créer un client.")
@@ -494,255 +501,313 @@ def page_performance_fees():
         st.error("Client non valide.")
         return
 
-    # 1) Ajouter / modifier la période (incl. MASI start value)
-    with st.expander("Ajouter ou modifier la Date de Début / la Valeur de Départ (Portefeuille & MASI)"):
-        # A) Let user add a new row
-        with st.form("perf_period_form", clear_on_submit=True):
-            start_date_input = st.date_input("Date de Début")
-            start_value_input = st.number_input("Valeur de Départ du Portefeuille", min_value=0.0, step=0.01, value=0.0)
-            masi_start_input = st.number_input("Valeur de Départ du MASI (même date)", min_value=0.0, step=0.01, value=0.0)
-            submitted = st.form_submit_button("Enregistrer la période de performance")
-            if submitted:
-                start_date_str = str(start_date_input)
-                db_utils.create_performance_period(
-                    client_id=cid,
-                    start_date_str=start_date_str,
-                    start_val=float(start_value_input),
-                    masi_start_value=float(masi_start_input)
-                )
+    # 2) Afficher et éditer (data_editor) les périodes existantes
+    st.subheader("Périodes de Performance Existantes")
+    df_periods = get_performance_periods_for_client(cid)
+    # Make sure columns exist even if empty:
+    for col in ["id", "start_date", "start_value", "masi_start_value", "bill_surperformance"]:
+        if col not in df_periods.columns:
+            df_periods[col] = None
 
-        # B) Let user edit existing rows in data_editor
-        df_periods = get_performance_periods_for_client(cid)
-        if df_periods.empty:
-            st.info("Aucune période de performance trouvée pour ce client.")
-        else:
-            st.write("### Périodes de Performance Existantes (modifiable)")
+    # Convert to correct dtypes:
+    df_periods["start_date"] = pd.to_datetime(df_periods["start_date"], errors="coerce")
+    df_periods["start_value"] = pd.to_numeric(df_periods["start_value"], errors="coerce")
+    df_periods["masi_start_value"] = pd.to_numeric(df_periods["masi_start_value"], errors="coerce")
 
-            # We'll keep 'id' for the row reference
-            # Let them edit 'start_date', 'start_value', 'masi_start_value'
-            columns_of_interest = ["id", "start_date", "start_value", "masi_start_value", "created_at"]
-            for col in columns_of_interest:
-                if col not in df_periods.columns:
-                    df_periods[col] = None
+    # Fill missing boolean with False for `bill_surperformance` column
+    df_periods["bill_surperformance"] = df_periods["bill_surperformance"].fillna(False).astype(bool)
 
-            df_periods = df_periods[columns_of_interest].copy()
+    # Show them in descending order by date
+    df_periods = df_periods.sort_values("start_date", ascending=False).reset_index(drop=True)
 
-            updated_periods = st.data_editor(
-                df_periods,
-                num_rows="dynamic",
-                use_container_width=True,
-                key=f"perf_periods_editor_{cid}",
-                column_config={
-                    "start_date": st.column_config.DateColumn("Date de Début"),
-                    "start_value": st.column_config.NumberColumn("Portf. Start Value", format="%.2f"),
-                    "masi_start_value": st.column_config.NumberColumn("MASI Start Value", format="%.2f")
-                    # 'id' and 'created_at' we'll not reconfigure, just keep them read-only
+    st.write("Vous pouvez modifier les valeurs ci-dessous (date, valeur portefeuille, valeur MASI, surperformance?).")
+
+    updated_periods = st.data_editor(
+        df_periods,
+        use_container_width=True,
+        num_rows="dynamic",
+        key=f"perf_periods_editor_{cid}",
+        column_config={
+            "id": st.column_config.TextColumn(
+                "ID (read-only)",
+                disabled=True
+            ),
+            "start_date": st.column_config.DateColumn(
+                "Date de Début",  
+                format="YYYY-MM-DD"
+            ),
+            "start_value": st.column_config.NumberColumn(
+                "Valeur Portefeuille Départ",
+                format="%.2f",
+                step=0.01
+            ),
+            "masi_start_value": st.column_config.NumberColumn(
+                "Valeur MASI Départ",
+                format="%.2f",
+                step=0.01
+            ),
+            "bill_surperformance": st.column_config.CheckboxColumn(
+                "Facturer la Surperformance ?"
+            )
+        }
+    )
+
+    # Button to update DB with changes
+    if st.button("Enregistrer les modifications sur les Périodes", key=f"save_periods_{cid}"):
+        # For each row in updated_periods, update performance_periods table
+        for idx, row in updated_periods.iterrows():
+            row_id = row.get("id", None)
+            if not row_id:
+                # No ID => insert new row (or skip)
+                # In your DB, 'id' might be serial PK. If you prefer insertion, do:
+                perf_row = {
+                    "client_id": cid,
+                    "start_date": str(row["start_date"].date()) if pd.notnull(row["start_date"]) else None,
+                    "start_value": float(row["start_value"] or 0),
+                    "masi_start_value": float(row["masi_start_value"] or 0),
+                    "bill_surperformance": bool(row["bill_surperformance"])
                 }
-            )
-
-            if st.button("Enregistrer les modifications des périodes", key=f"save_perf_periods_{cid}"):
-                # Update each row in supabase
-                perf_tbl = db_utils.performance_table()
-                for idx, rowp in updated_periods.iterrows():
-                    row_id = rowp["id"]
-                    if pd.isna(row_id):
-                        # This row might be newly added in the data_editor, skip or insert
-                        continue
-
-                    # Convert the date to string
-                    date_str = None
-                    if isinstance(rowp["start_date"], pd.Timestamp):
-                        date_str = str(rowp["start_date"].date())
-                    else:
-                        date_str = str(rowp["start_date"])
-
-                    # do the update
-                    try:
-                        perf_tbl.update({
-                            "start_date": date_str,
-                            "start_value": float(rowp["start_value"] or 0.0),
-                            "masi_start_value": float(rowp["masi_start_value"] or 0.0)
-                        }).eq("id", row_id).execute()
-                    except Exception as e:
-                        st.error(f"Erreur mise à jour ID={row_id}: {e}")
-
-                st.success("Périodes de performance mises à jour.")
-                st.experimental_rerun()
-
-    # 2) Calculer la Performance & Frais
-    with st.expander("Calculer la Performance & les Frais à partir d'une Date de Début"):
-        df_periods2 = get_performance_periods_for_client(cid)
-        if df_periods2.empty:
-            st.warning("Ce client ne possède aucune période de performance.")
-        else:
-            df_periods2 = df_periods2.sort_values("start_date", ascending=False)
-            start_options = df_periods2["start_date"].astype(str).unique().tolist()
-            selected_start_date = st.selectbox(
-                "Choisir la date de départ pour le calcul",
-                start_options,
-                key=f"calc_perf_startdate_{cid}"
-            )
-            row_chosen = df_periods2[df_periods2["start_date"].astype(str) == selected_start_date].iloc[0]
-
-            chosen_start_value = float(row_chosen.get("start_value", 0.0))
-            chosen_masi_start  = float(row_chosen.get("masi_start_value", 0.0))
-
-            # Valeur actuelle du portefeuille
-            dfp = get_portfolio(client_name)
-            if dfp.empty:
-                st.warning("Portefeuille vide.")
+                try:
+                    get_supabase().table("performance_periods").insert(perf_row).execute()
+                except Exception as e:
+                    st.error(f"Erreur lors de l'insertion (ligne sans ID): {e}")
             else:
-                # Calcul du total_val
-                stocks2 = fetch_stocks()
-                total_val = 0.0
-                for _, prow in dfp.iterrows():
-                    valx = str(prow["valeur"])
-                    match2 = stocks2[stocks2["valeur"] == valx]
-                    px = float(match2["cours"].values[0]) if not match2.empty else 0.0
-                    qtyx = float(prow["quantité"])
-                    total_val += (qtyx * px)
+                # Update existing row
+                perf_update = {
+                    "start_date": str(row["start_date"].date()) if pd.notnull(row["start_date"]) else None,
+                    "start_value": float(row["start_value"] or 0),
+                    "masi_start_value": float(row["masi_start_value"] or 0),
+                    "bill_surperformance": bool(row["bill_surperformance"])
+                }
+                try:
+                    get_supabase().table("performance_periods").update(perf_update).eq("id", row_id).execute()
+                except Exception as e:
+                    st.error(f"Erreur lors de la mise à jour (ID={row_id}): {e}")
 
-                gains = total_val - chosen_start_value
-                perf_pct = (gains / chosen_start_value)*100.0 if chosen_start_value>0 else 0.0
+        st.success("Modifications enregistrées avec succès!")
+        st.experimental_rerun()
+
+    # 3) Form pour ajouter une nouvelle période
+    with st.expander("Ajouter une Nouvelle Période"):
+        with st.form("perf_period_form", clear_on_submit=True):
+            start_date_input = st.date_input("Date de Début", key="new_start_date")
+            start_value_input = st.number_input("Valeur de Départ du Portefeuille", min_value=0.0, step=0.01, value=0.0, key="new_portf_val")
+            masi_start_input = st.number_input("Valeur de Départ du MASI", min_value=0.0, step=0.01, value=0.0, key="new_masi_val")
+            surperf_checked = st.checkbox("Facturer surperformance ?", value=False, key="new_surperf_check")
+
+            new_submitted = st.form_submit_button("Créer la nouvelle période")
+            if new_submitted:
+                try:
+                    row_insert = {
+                        "client_id": cid,
+                        "start_date": str(start_date_input),
+                        "start_value": float(start_value_input),
+                        "masi_start_value": float(masi_start_input),
+                        "bill_surperformance": bool(surperf_checked)
+                    }
+                    get_supabase().table("performance_periods").insert(row_insert).execute()
+                    st.success("Nouvelle période créée!")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Erreur lors de la création de la nouvelle période: {e}")
+
+    # 4) Calculer la performance pour la période sélectionnée
+    st.subheader("Calculer la Performance & les Frais (Portefeuille vs. MASI)")
+    if not updated_periods.empty:
+        # Let user pick which row (by date) to compute
+        date_options = updated_periods["start_date"].dropna().unique().tolist()
+        if not date_options:
+            st.info("Aucune date de début valide pour calculer la performance.")
+            return
+
+        sel_date = st.selectbox("Choisir la date de début de la période",
+                                options=date_options,
+                                format_func=lambda d: d.strftime("%Y-%m-%d") if pd.notnull(d) else "",
+                                key=f"calc_perf_startdate_{cid}")
+        if sel_date:
+            # find that row
+            row_sel = updated_periods.loc[updated_periods["start_date"] == sel_date]
+            if row_sel.empty:
+                st.warning("Aucune donnée pour cette date.")
+                return
+            row_sel = row_sel.iloc[0]  # pick first
+
+            # Extract data
+            st_val   = float(row_sel.get("start_value", 0))
+            st_masi  = float(row_sel.get("masi_start_value", 0))
+            # Is the user to be billed on surperformance or normal? We'll fetch from row or from client
+            # This is stored either in row or in the clients table
+            surperf_mode = bool(row_sel.get("bill_surperformance", False))
+
+            # Récupérer la valeur du portefeuille
+            df_portfolio = get_portfolio(client_name)
+            if df_portfolio.empty:
+                st.warning("Portefeuille vide pour ce client.")
+            else:
+                # Calculer la valeur courante
+                stocks_df = fetch_stocks()
+                portf_current_val = 0.0
+                for _, prow in df_portfolio.iterrows():
+                    val_ = str(prow["valeur"])
+                    match_ = stocks_df[stocks_df["valeur"] == val_]
+                    live_price_ = float(match_["cours"].values[0]) if not match_.empty else 0.0
+                    qty_ = float(prow["quantité"])
+                    portf_current_val += (qty_ * live_price_)
+
+                gains_portf = portf_current_val - st_val
+                perf_portf_pct = (gains_portf / st_val * 100.0) if (st_val > 0) else 0.0
 
                 # MASI
-                masi_cur = get_current_masi()
-                masi_gains = masi_cur - chosen_masi_start
-                masi_perf_pct = (masi_gains / chosen_masi_start)*100.0 if chosen_masi_start>0 else 0.0
+                masi_now = get_current_masi()  # your function that fetches the CASABOURSE
+                gains_masi = masi_now - st_masi
+                perf_masi_pct = (gains_masi / st_masi * 100.0) if (st_masi>0) else 0.0
 
                 # Surperformance
-                surperf_abs = gains - masi_gains
+                surperf_abs = gains_portf - gains_masi
                 surperf_pct = 0.0
-                if chosen_start_value>0:
-                    surperf_pct = (surperf_abs / chosen_start_value)*100.0
+                if st_val>0:
+                    surperf_pct = surperf_abs / st_val * 100.0
 
                 # Facturer
                 cinfo = get_client_info(client_name)
                 mgmt_rate = float(cinfo.get("management_fee_rate", 0.0))/100.0
-                use_surperf = cinfo.get("bill_surperformance", False)
 
-                if use_surperf:
-                    base_amount = max(0.0, surperf_abs)
-                    fees_owed   = base_amount * mgmt_rate
+                if surperf_mode:
+                    # On facture la surperformance
+                    base_amount = max(surperf_abs, 0)
+                    fees_owed = base_amount * mgmt_rate
                 else:
-                    base_amount = max(0.0, gains)
-                    fees_owed   = base_amount * mgmt_rate
+                    # On facture la performance standard du portefeuille
+                    base_amount = max(gains_portf, 0)
+                    fees_owed = base_amount * mgmt_rate
 
-                # Affichage en tableau
-                data_calc = [{
-                    "Portf Départ": chosen_start_value,
-                    "Portf Actuel": total_val,
-                    "Perf Portf %": perf_pct,
-                    "MASI Départ": chosen_masi_start,
-                    "MASI Actuel": masi_cur,
-                    "Perf MASI %": masi_perf_pct,
-                    "Surperf Abs.": surperf_abs,
-                    "Surperf %": surperf_pct,
-                    "Frais Owed": fees_owed
-                }]
-                df_result = pd.DataFrame(data_calc)
-                st.dataframe(
-                    df_result.style.format("{:,.2f}"),
-                    use_container_width=True
+                # Afficher un tableau net
+                results_data = [
+                    {
+                        "Portefeuille Départ": st_val,
+                        "Portefeuille Actuel": portf_current_val,
+                        "Gains (Abs.)": gains_portf,
+                        "Performance Portf. %": perf_portf_pct,
+                        "MASI Départ": st_masi,
+                        "MASI Actuel": masi_now,
+                        "Gains MASI": gains_masi,
+                        "Perf. MASI %": perf_masi_pct,
+                        "Surperformance Abs.": surperf_abs,
+                        "Surperformance %": surperf_pct,
+                        "Facturation (Surperf?)": str(surperf_mode),
+                        "Frais Owed": fees_owed
+                    }
+                ]
+                df_res = pd.DataFrame(results_data)
+                # Style
+                numeric_cols = df_res.columns.tolist()
+                df_res_style = df_res.style.format(
+                    subset=numeric_cols,
+                    formatter="{:,.2f}"
                 )
+                st.dataframe(df_res_style, use_container_width=True)
 
-    # 3) Résumé de Performance (tous les clients)
-    with st.expander("Résumé de Performance (tous les clients)"):
-        df_latest = get_latest_performance_period_for_all_clients()
-        if df_latest.empty:
-            st.info("Aucune donnée de performance pour aucun client.")
-        else:
-            summary_rows = []
-            stocks_df = fetch_stocks()
-            masi_current = get_current_masi()
-            all_clients_list = get_all_clients()
+    # 5) Résumé de Performance (tous les clients)
+    st.subheader("Résumé de Performance (tous les clients)")
+    df_latest = get_latest_performance_period_for_all_clients()
+    if df_latest.empty:
+        st.info("Aucune donnée de performance pour aucun client.")
+    else:
+        summary_rows = []
+        stocks_df = fetch_stocks()
+        masi_now = get_current_masi()
+        all_cls = get_all_clients()
 
-            for _, rrow in df_latest.iterrows():
-                c_id   = rrow["client_id"]
-                s_val  = float(rrow.get("start_value", 0.0))
-                s_masi = float(rrow.get("masi_start_value", 0.0))
-                ddate  = str(rrow.get("start_date", ""))
+        for _, rrow in df_latest.iterrows():
+            c_id = rrow["client_id"]
+            s_val = float(rrow.get("start_value", 0))
+            s_masi= float(rrow.get("masi_start_value", 0))
+            ddate= str(rrow.get("start_date",""))
+            surperf_bool = bool(rrow.get("bill_surperformance", False))
 
-                # Trouver le nom du client
-                cname_found = None
-                for nm in all_clients_list:
-                    if get_client_id(nm) == c_id:
-                        cname_found = nm
-                        break
-                if not cname_found:
-                    continue
+            # Retrouver le nom du client
+            name_found = None
+            for cxx in all_cls:
+                if get_client_id(cxx) == c_id:
+                    name_found = cxx
+                    break
+            if not name_found:
+                continue
 
-                # Calculer la valeur courante
-                pdf_ = get_portfolio(cname_found)
-                cur_val = 0.0
-                if not pdf_.empty:
-                    for _, prow2 in pdf_.iterrows():
-                        v2 = str(prow2["valeur"])
-                        mm = stocks_df[stocks_df["valeur"] == v2]
-                        px2 = float(mm["cours"].values[0]) if not mm.empty else 0.0
-                        q2  = float(prow2["quantité"])
-                        cur_val += (q2 * px2)
+            # Valeur courante
+            pdf = get_portfolio(name_found)
+            cur_val = 0.0
+            if not pdf.empty:
+                for _, p2 in pdf.iterrows():
+                    v2 = str(p2["valeur"])
+                    mm = stocks_df[stocks_df["valeur"]==v2]
+                    p2_price = float(mm["cours"].values[0]) if not mm.empty else 0.0
+                    cur_val += (float(p2["quantité"]) * p2_price)
 
-                gains_p = cur_val - s_val
-                perf_p = (gains_p / s_val)*100.0 if s_val>0 else 0.0
-                gains_m = masi_current - s_masi
-                perf_m  = (gains_m / s_masi)*100.0 if s_masi>0 else 0.0
+            gains_portf = cur_val - s_val
+            perf_portf_pct = (gains_portf / s_val * 100) if s_val>0 else 0.0
+            gains_masi = masi_now - s_masi
+            perf_masi_pct = (gains_masi / s_masi * 100) if s_masi>0 else 0.0
 
-                surp_abs = gains_p - gains_m
-                surp_pct = (surp_abs / s_val)*100.0 if s_val>0 else 0.0
+            surperf_abs = gains_portf - gains_masi
+            surperf_pct = (surperf_abs/s_val*100) if s_val>0 else 0.0
 
-                cinfo_db = get_client_info(cname_found)
-                mgmtr = float(cinfo_db.get("management_fee_rate", 0.0))/100.0
-                if cinfo_db.get("bill_surperformance", False):
-                    base_amt = max(0.0, surp_abs)
-                else:
-                    base_amt = max(0.0, gains_p)
-                fees_ = base_amt * mgmtr
-
-                summary_rows.append({
-                    "Client": cname_found,
-                    "Date Début": ddate,
-                    "Portf Départ": s_val,
-                    "Portf Actuel": cur_val,
-                    "Perf Portf %": perf_p,
-                    "MASI Départ": s_masi,
-                    "MASI Actuel": masi_current,
-                    "Perf MASI %": perf_m,
-                    "Surperf Abs.": surp_abs,
-                    "Surperf %": surp_pct,
-                    "Frais": fees_
-                })
-
-            if not summary_rows:
-                st.info("Aucune donnée valide à afficher.")
+            # Frais
+            cinfo_db = get_client_info(name_found)
+            mgmtr = float(cinfo_db.get("management_fee_rate",0))/100.0
+            if surperf_bool:
+                base_amt = max(surperf_abs, 0)
             else:
-                df_sum = pd.DataFrame(summary_rows)
-                fmt_map = {
-                    "Portf Départ": "{:,.2f}",
-                    "Portf Actuel": "{:,.2f}",
-                    "Perf Portf %": "{:,.2f}",
-                    "MASI Départ": "{:,.2f}",
-                    "MASI Actuel": "{:,.2f}",
-                    "Perf MASI %": "{:,.2f}",
-                    "Surperf Abs.": "{:,.2f}",
-                    "Surperf %": "{:,.2f}",
-                    "Frais": "{:,.2f}"
-                }
-                df_styled = df_sum.style.format(fmt_map)
-                st.dataframe(df_styled, use_container_width=True)
+                base_amt = max(gains_portf, 0)
+            fees2 = base_amt * mgmtr
 
-                # Totaux
-                total_start = df_sum["Portf Départ"].sum()
-                total_cur   = df_sum["Portf Actuel"].sum()
-                total_fees  = df_sum["Frais"].sum()
+            summary_rows.append({
+                "Client": name_found,
+                "Date Début": ddate,
+                "Portf. Départ": s_val,
+                "MASI Départ": s_masi,
+                "Portf. Actuel": cur_val,
+                "Gains Portf.": gains_portf,
+                "Perf. Portf. %": perf_portf_pct,
+                "Gains MASI": gains_masi,
+                "Perf. MASI %": perf_masi_pct,
+                "Surperf. Abs": surperf_abs,
+                "Surperf. %": surperf_pct,
+                "Facture Surperf?": surperf_bool,
+                "Frais": fees2
+            })
 
-                totals_df = pd.DataFrame([{
-                    "Somme Start Value": total_start,
-                    "Somme Current": total_cur,
-                    "Somme Frais": total_fees
-                }])
-                st.write("#### Totaux Globaux")
-                st.dataframe(
-                    totals_df.style.format("{:,.2f}"),
-                    use_container_width=True
-                )
+        if not summary_rows:
+            st.info("Aucune donnée valide à afficher.")
+        else:
+            df_sum = pd.DataFrame(summary_rows)
+            format_dict = {
+                "Portf. Départ": "{:,.2f}",
+                "MASI Départ": "{:,.2f}",
+                "Portf. Actuel": "{:,.2f}",
+                "Gains Portf.": "{:,.2f}",
+                "Perf. Portf. %": "{:,.2f}",
+                "Gains MASI": "{:,.2f}",
+                "Perf. MASI %": "{:,.2f}",
+                "Surperf. Abs": "{:,.2f}",
+                "Surperf. %": "{:,.2f}",
+                "Frais": "{:,.2f}"
+            }
+            df_sum_style = df_sum.style.format(format_dict)
+            st.dataframe(df_sum_style, use_container_width=True)
+
+            # Totaux
+            total_pstart = df_sum["Portf. Départ"].sum()
+            total_pcur   = df_sum["Portf. Actuel"].sum()
+            total_fees   = df_sum["Frais"].sum()
+
+            totals_df = pd.DataFrame([{
+                "Somme Départ": total_pstart,
+                "Somme Actuel": total_pcur,
+                "Total Frais": total_fees
+            }])
+            st.write("#### Totaux Globaux")
+            st.dataframe(
+                totals_df.style.format("{:,.2f}"),
+                use_container_width=True
+            )
