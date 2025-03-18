@@ -1,44 +1,77 @@
 # logic.py
+
 import streamlit as st
 import pandas as pd
-from db_utils import get_portfolio, get_client_info, get_client_id, portfolio_table, fetch_instruments, fetch_stocks
-from db_utils import client_has_portfolio  # maybe needed
 import math
 
+import db_utils
+from db_utils import (
+    get_portfolio,
+    get_client_info,
+    get_client_id,
+    portfolio_table,
+    fetch_instruments,
+    fetch_stocks,
+    client_has_portfolio,
+    create_performance_period,
+    get_performance_periods_for_client,
+    get_latest_performance_period_for_all_clients,
+)
+
+######################################################
+#     Real-time MASI Fetch
+######################################################
+
 def get_current_masi():
-    """Return the real-time MASI index from Casablanca Bourse."""
+    """
+    Return the real-time MASI index from Casablanca Bourse
+    by calling db_utils.fetch_masi_from_cb().
+    """
     return db_utils.fetch_masi_from_cb()
+
+######################################################
+#  Compute Poids Masi for each "valeur"
+######################################################
 
 def compute_poids_masi():
     """
-    Creates a dictionary { valeur: { "capitalisation": X, "poids_masi": Y }, ...}
-    skipping instruments not found in the JSON (cours=0).
+    Creates a dictionary { valeur: {"capitalisation": X, "poids_masi": Y}, ... }
+    skipping instruments not found in the IDBourse data (or cours=0).
+    This is done by merging:
+      - 'instruments' (table in your DB)
+      - 'stocks' (fetched from IDBourse)
+    Then computing capitalisation = (nombre_de_titres * cours),
+    floated_cap = capitalisation * facteur_flottant,
+    total_floated = sum of all floated_cap => each 'poids_masi' = (floated_cap / total_floated)*100.
     """
-    import numpy as np
     instruments_df = fetch_instruments()
     if instruments_df.empty:
         return {}
-    stocks = fetch_stocks()
 
-    instr_renamed = instruments_df.rename(columns={"instrument_name":"valeur"})
-    merged = pd.merge(instr_renamed, stocks, on="valeur", how="left")
+    stocks_df = fetch_stocks()
+    # unify name to "valeur" for the join
+    instr_renamed = instruments_df.rename(columns={"instrument_name": "valeur"})
+    merged = pd.merge(instr_renamed, stocks_df, on="valeur", how="left")
+
+    # ensure numeric
     merged["cours"] = merged["cours"].fillna(0.0).astype(float)
+    merged["nombre_de_titres"] = merged["nombre_de_titres"].fillna(0.0).astype(float)
+    merged["facteur_flottant"] = merged["facteur_flottant"].fillna(0.0).astype(float)
 
-    # Exclude cours=0
-    merged = merged[merged["cours"]!=0.0].copy()
+    # exclude if cours=0 or nombre_de_titres=0
+    merged = merged[(merged["cours"] != 0.0) & (merged["nombre_de_titres"] != 0.0)].copy()
 
-    merged["nombre_de_titres"] = merged["nombre_de_titres"].astype(float)
-    merged["facteur_flottant"] = merged["facteur_flottant"].astype(float)
+    merged["capitalisation"] = merged["cours"] * merged["nombre_de_titres"]
+    merged["floated_cap"] = merged["capitalisation"] * merged["facteur_flottant"]
 
-    merged["capitalisation"] = merged["cours"]*merged["nombre_de_titres"]
-    merged["floated_cap"] = merged["capitalisation"]*merged["facteur_flottant"]
-    total_floated = merged["floated_cap"].sum()
-    if total_floated<=0:
+    total_floated_cap = merged["floated_cap"].sum()
+    if total_floated_cap <= 0:
         merged["poids_masi"] = 0.0
     else:
-        merged["poids_masi"] = (merged["floated_cap"]/total_floated)*100.0
+        merged["poids_masi"] = (merged["floated_cap"] / total_floated_cap) * 100.0
 
-    outdict={}
+    # build dict
+    outdict = {}
     for _, row in merged.iterrows():
         val = row["valeur"]
         outdict[val] = {
@@ -47,219 +80,286 @@ def compute_poids_masi():
         }
     return outdict
 
-# We'll store a global map for Masi
+
+# Global variable to store the computed map
 poids_masi_map = compute_poids_masi()
 
-def create_portfolio_rows(client_name, holdings):
-    from db_utils import portfolio_table, get_client_id
+
+######################################################
+#   Create a brand-new portfolio for a client
+######################################################
+
+def create_portfolio_rows(client_name: str, holdings: dict):
+    """
+    Upserts multiple rows (valeur, quantity=holdings[valeur]) into the 'portfolios' table
+    for the client if they have none. If they already have a portfolio, warn & return.
+    Each new row => vwap=0, cours=0, valorisation=0 (will be recalculated later).
+    """
     cid = get_client_id(client_name)
     if cid is None:
         st.error("Client not found.")
         return
 
     if client_has_portfolio(client_name):
-        st.warning(f"Client '{client_name}' already has a portfolio.")
+        st.warning(f"Le client '{client_name}' possède déjà un portefeuille.")
         return
 
     rows = []
-    for stock, qty in holdings.items():
-        if qty>0:
+    for stock_name, qty_val in holdings.items():
+        if qty_val > 0:
             rows.append({
                 "client_id": cid,
-                "valeur": str(stock),
-                "quantité": float(qty),
+                "valeur": str(stock_name),
+                "quantité": float(qty_val),
                 "vwap": 0.0,
                 "cours": 0.0,
                 "valorisation": 0.0
             })
+
     if not rows:
-        st.warning("No stocks or cash provided.")
+        st.warning("Aucun actif (ou cash) fourni pour la création du portefeuille.")
         return
 
     try:
         portfolio_table().upsert(rows, on_conflict="client_id,valeur").execute()
-        st.success(f"Portfolio created for '{client_name}'!")
-        st.rerun()
+        st.success(f"Portefeuille créé pour '{client_name}'!")
+        st.experimental_rerun()
     except Exception as e:
-        st.error(f"Error creating portfolio: {e}")
+        st.error(f"Erreur lors de la création du portefeuille: {e}")
 
-def new_portfolio_creation_ui(client_name):
-    """
-    Lets the user pick stocks & quantities for a brand-new portfolio for 'client_name'.
-    """
-    from db_utils import fetch_stocks
-    stocks = fetch_stocks()
 
-    st.subheader(f"➕ Add Initial Holdings for {client_name}")
+def new_portfolio_creation_ui(client_name: str):
+    """
+    Simple UI to add multiple stocks/cash to a brand-new portfolio.
+    The user picks a stock, quantity => we store it in st.session_state,
+    then upon 'Create Portfolio', we pass them to create_portfolio_rows.
+    """
+    st.subheader(f"➕ Définir les actifs initiaux pour {client_name}")
+
     if "temp_holdings" not in st.session_state:
-        st.session_state.temp_holdings={}
-    new_stock = st.selectbox(f"Select Stock/Cash for {client_name}", stocks["valeur"].tolist(), key=f"new_stock_{client_name}")
-    qty = st.number_input(f"Quantity for {client_name}", min_value=1.0, value=1.0, step=0.01, key=f"new_qty_{client_name}")
+        st.session_state.temp_holdings = {}
 
-    if st.button(f"➕ Add {new_stock}", key=f"add_btn_{client_name}"):
-        st.session_state.temp_holdings[new_stock]=float(qty)
-        st.success(f"Added {qty} of {new_stock}")
+    all_stocks = fetch_stocks()
+    selected_stock = st.selectbox(
+        f"Choisir une valeur ou 'Cash' pour {client_name}",
+        all_stocks["valeur"].tolist(),
+        key=f"new_stock_{client_name}"
+    )
 
+    qty = st.number_input(
+        f"Quantité pour {client_name}",
+        min_value=1.0,
+        value=1.0,
+        step=1.0,  # or step=0.01 if you want decimals for cash
+        key=f"new_qty_{client_name}"
+    )
+
+    if st.button(f"➕ Ajouter {selected_stock}", key=f"add_btn_{client_name}"):
+        st.session_state.temp_holdings[selected_stock] = float(qty)
+        st.success(f"Ajouté {qty} de {selected_stock}")
+
+    # If we have any temporary holdings, show them
     if st.session_state.temp_holdings:
-        st.write("### Current Selections:")
+        st.write("### Actifs Sélectionnés :")
         df_hold = pd.DataFrame([
-            {"valeur":k, "quantité":v} for k,v in st.session_state.temp_holdings.items()
+            {"valeur": k, "quantité": v} for k, v in st.session_state.temp_holdings.items()
         ])
         st.dataframe(df_hold, use_container_width=True)
 
-        if st.button(f"💾 Create Portfolio for {client_name}", key=f"create_pf_btn_{client_name}"):
+        # Button => create final portfolio
+        if st.button(f"💾 Créer le Portefeuille pour {client_name}", key=f"create_pf_btn_{client_name}"):
             create_portfolio_rows(client_name, st.session_state.temp_holdings)
             del st.session_state.temp_holdings
 
-def buy_shares(client_name, stock_name, transaction_price, quantity):
-    from db_utils import get_portfolio, get_client_info, get_client_id, portfolio_table
+
+######################################################
+#        Buy / Sell Operations
+######################################################
+
+def buy_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
+    """
+    Transaction d'achat:
+      - Vérifier s'il existe suffisamment de Cash
+      - Calculer vwap => inclure la commission
+      - Mettre à jour la ligne 'valeur' ou l'insérer si inexistante
+      - Débiter le cash
+    """
     cinfo = get_client_info(client_name)
     if not cinfo:
-        st.error("Client info not found.")
+        st.error("Informations du client introuvables.")
         return
+
     cid = get_client_id(client_name)
     if cid is None:
-        st.error("Client not found.")
+        st.error("Client introuvable.")
         return
 
-    df = get_portfolio(client_name)
+    dfp = get_portfolio(client_name)
     exchange_rate = float(cinfo.get("exchange_commission_rate", 0.0))
 
-    raw_cost = transaction_price*quantity
-    commission = raw_cost*(exchange_rate/100.0)
-    cost_with_comm = raw_cost+commission
+    raw_cost = transaction_price * quantity
+    commission = raw_cost * (exchange_rate / 100.0)
+    cost_with_comm = raw_cost + commission
 
-    # check Cash
-    cash_match = df[df["valeur"]=="Cash"]
-    current_cash = 0.0
-    if not cash_match.empty:
-        current_cash = float(cash_match["quantité"].values[0])
-    if cost_with_comm>current_cash:
-        st.error(f"Insufficient cash: Have {current_cash:.2f}, need {cost_with_comm:.2f}.")
+    # Vérifier le Cash
+    cash_match = dfp[dfp["valeur"] == "Cash"]
+    current_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
+
+    if cost_with_comm > current_cash:
+        st.error(f"Montant insuffisant en Cash: disponible={current_cash:,.2f}, nécessaire={cost_with_comm:,.2f}")
         return
 
-    match = df[df["valeur"]==stock_name]
+    # Vérifier si la valeur existe déjà
+    match = dfp[dfp["valeur"] == stock_name]
     if match.empty:
-        new_vwap = cost_with_comm/quantity
+        # Nouvelle ligne
+        new_vwap = cost_with_comm / quantity
         try:
             portfolio_table().upsert([{
                 "client_id": cid,
-                "valeur": str(stock_name),
+                "valeur": stock_name,
                 "quantité": quantity,
                 "vwap": new_vwap,
-                "cours":0.0,
-                "valorisation":0.0
+                "cours": 0.0,
+                "valorisation": 0.0
             }], on_conflict="client_id,valeur").execute()
         except Exception as e:
-            st.error(f"Error adding new stock: {e}")
+            st.error(f"Erreur lors de l'ajout de la valeur '{stock_name}': {e}")
             return
     else:
+        # Mise à jour
         old_qty = float(match["quantité"].values[0])
-        old_vwap= float(match["vwap"].values[0])
-        old_cost = old_qty*old_vwap
-        new_cost = old_cost+cost_with_comm
-        new_qty = old_qty+quantity
-        new_vwap= new_cost/new_qty if new_qty>0 else 0.0
+        old_vwap = float(match["vwap"].values[0])
+        old_cost = old_qty * old_vwap
+
+        new_cost = old_cost + cost_with_comm
+        new_qty = old_qty + quantity
+        new_vwap = new_cost / new_qty if new_qty > 0 else 0.0
+
         try:
             portfolio_table().update({
                 "quantité": new_qty,
                 "vwap": new_vwap
-            }).eq("client_id", cid).eq("valeur",str(stock_name)).execute()
+            }).eq("client_id", cid).eq("valeur", stock_name).execute()
         except Exception as e:
-            st.error(f"Error updating existing stock: {e}")
+            st.error(f"Erreur mise à jour stock existant '{stock_name}': {e}")
             return
 
-    # update Cash
+    # Débiter le Cash
+    new_cash = current_cash - cost_with_comm
     if cash_match.empty:
+        # Insérer la ligne Cash
         try:
             portfolio_table().upsert([{
                 "client_id": cid,
-                "valeur":"Cash",
-                "quantité": current_cash-cost_with_comm,
-                "vwap":1.0,
-                "cours":0.0,
-                "valorisation":0.0
+                "valeur": "Cash",
+                "quantité": new_cash,
+                "vwap": 1.0,
+                "cours": 0.0,
+                "valorisation": 0.0
             }], on_conflict="client_id,valeur").execute()
         except Exception as e:
-            st.error(f"Error creating cash row: {e}")
+            st.error(f"Erreur création de la ligne Cash: {e}")
             return
     else:
-        new_cash = current_cash-cost_with_comm
         try:
             portfolio_table().update({
                 "quantité": new_cash,
-                "vwap":1.0
-            }).eq("client_id", cid).eq("valeur","Cash").execute()
+                "vwap": 1.0
+            }).eq("client_id", cid).eq("valeur", "Cash").execute()
         except Exception as e:
-            st.error(f"Error updating cash: {e}")
+            st.error(f"Erreur lors du débit Cash: {e}")
             return
-    st.success(f"Bought {quantity} of {stock_name} @ {transaction_price:.2f} => cost {cost_with_comm:.2f}")
-    st.rerun()
 
-def sell_shares(client_name, stock_name, transaction_price, quantity):
-    from db_utils import get_portfolio, get_client_info, get_client_id, portfolio_table
-    cinfo= get_client_info(client_name)
+    st.success(
+        f"Acheté {quantity:.0f} de '{stock_name}' @ {transaction_price:,.2f} => "
+        f"coût total={cost_with_comm:,.2f} (commission incluse)."
+    )
+    st.experimental_rerun()
+
+
+def sell_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
+    """
+    Transaction de vente:
+      - Vérifier si on possède la valeur/quantité
+      - Calculer le net_proceeds => retrancher commission + tax si profit
+      - Mettre à jour la quantité
+      - Créditer le cash
+    """
+    cinfo = get_client_info(client_name)
     if not cinfo:
-        st.error("Client info not found.")
+        st.error("Client introuvable.")
         return
+
     cid = get_client_id(client_name)
     if cid is None:
-        st.error("Client not found.")
-        return
-    exchange_rate= float(cinfo.get("exchange_commission_rate",0.0))
-    tax_rate= float(cinfo.get("tax_on_gains_rate",15.0))
-    df= get_portfolio(client_name)
-    match= df[df["valeur"]==stock_name]
-    if match.empty:
-        st.error(f"Client does not hold {stock_name}.")
-        return
-    old_qty= float(match["quantité"].values[0])
-    if quantity> old_qty:
-        st.error(f"Cannot sell {quantity}, only {old_qty} available.")
-        return
-    old_vwap= float(match["vwap"].values[0])
-    raw_proceeds= transaction_price*quantity
-    commission= raw_proceeds*(exchange_rate/100.0)
-    net_proceeds= raw_proceeds-commission
-    cost_of_shares= old_vwap*quantity
-    profit= net_proceeds-cost_of_shares
-    if profit>0:
-        tax= profit*(tax_rate/100.0)
-        net_proceeds-=tax
-    new_qty= old_qty-quantity
-    try:
-        if new_qty<=0:
-            portfolio_table().delete().eq("client_id",cid).eq("valeur", str(stock_name)).execute()
-        else:
-            portfolio_table().update({"quantité":new_qty}).eq("client_id",cid).eq("valeur",str(stock_name)).execute()
-    except Exception as e:
-        st.error(f"Error updating stock after sell: {e}")
+        st.error("Client introuvable.")
         return
 
-    # update Cash
-    cash_match= df[df["valeur"]=="Cash"]
-    old_cash= 0.0
-    if not cash_match.empty:
-        old_cash= float(cash_match["quantité"].values[0])
-    new_cash= old_cash+ net_proceeds
+    exchange_rate = float(cinfo.get("exchange_commission_rate", 0.0))
+    tax_rate      = float(cinfo.get("tax_on_gains_rate", 15.0))
+
+    dfp = get_portfolio(client_name)
+    match = dfp[dfp["valeur"] == stock_name]
+    if match.empty:
+        st.error(f"Le client ne possède pas la valeur '{stock_name}'.")
+        return
+
+    old_qty = float(match["quantité"].values[0])
+    if quantity > old_qty:
+        st.error(f"Quantité insuffisante: vous vendez {quantity}, mais possédez {old_qty}.")
+        return
+
+    old_vwap = float(match["vwap"].values[0])
+
+    raw_proceeds = transaction_price * quantity
+    commission   = raw_proceeds * (exchange_rate / 100.0)
+    net_proceeds = raw_proceeds - commission
+
+    cost_shares  = old_vwap * quantity
+    profit       = net_proceeds - cost_shares
+    if profit > 0:
+        tax = profit * (tax_rate / 100.0)
+        net_proceeds -= tax
+
+    new_qty = old_qty - quantity
+
+    # Mise à jour / suppression de la valeur
+    try:
+        if new_qty <= 0.0:
+            portfolio_table().delete().eq("client_id", cid).eq("valeur", stock_name).execute()
+        else:
+            portfolio_table().update({"quantité": new_qty}).eq("client_id", cid).eq("valeur", stock_name).execute()
+    except Exception as e:
+        st.error(f"Erreur mise à jour après vente: {e}")
+        return
+
+    # Créditer le Cash
+    cash_match = dfp[dfp["valeur"] == "Cash"]
+    old_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
+    new_cash = old_cash + net_proceeds
 
     try:
         if cash_match.empty:
             portfolio_table().upsert([{
-                "client_id":cid,
-                "valeur":"Cash",
+                "client_id": cid,
+                "valeur": "Cash",
                 "quantité": new_cash,
-                "vwap":1.0,
-                "cours":0.0,
-                "valorisation":0.0
+                "vwap": 1.0,
+                "cours": 0.0,
+                "valorisation": 0.0
             }], on_conflict="client_id,valeur").execute()
         else:
             portfolio_table().update({
                 "quantité": new_cash,
-                "vwap":1.0
-            }).eq("client_id", cid).eq("valeur","Cash").execute()
+                "vwap": 1.0
+            }).eq("client_id", cid).eq("valeur", "Cash").execute()
     except Exception as e:
-        st.error(f"Error updating cash after sell: {e}")
+        st.error(f"Erreur mise à jour Cash après vente: {e}")
         return
-    st.success(f"Sold {quantity} of {stock_name} => net {net_proceeds:.2f}")
-    st.rerun()
+
+    st.success(
+        f"Vendu {quantity:.0f} de '{stock_name}' @ {transaction_price:,.2f} => "
+        f"net {net_proceeds:,.2f} (commission + taxe gains inclus)."
+    )
+    st.experimental_rerun()
