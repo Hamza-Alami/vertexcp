@@ -281,7 +281,7 @@ def show_portfolio(client_name, read_only=False):
                 except Exception as e:
                     st.error(f"Erreur lors de la sauvegarde pour {valn}: {e}")
             st.success(f"Portefeuille de « {client_name} » mis à jour avec succès!")
-            st.experimental_rerun()
+            st.rerun()
 
     # BUY
     st.write("### Opération d'Achat")
@@ -499,7 +499,7 @@ def page_performance_fees():
     if st.button("Enregistrer modifications des périodes"):
         update_performance_period_rows(df_periods, updated_periods)
         st.success("Modifications enregistrées avec succès!")
-        st.experimental_rerun()
+        st.rerun()
 
     # Calculer la performance sur la période choisie
     st.subheader("Calculer la Performance sur une Période")
