@@ -5,6 +5,10 @@ from db_utils import get_portfolio, get_client_info, get_client_id, portfolio_ta
 from db_utils import client_has_portfolio  # maybe needed
 import math
 
+def get_current_masi():
+    """Return the real-time MASI index from Casablanca Bourse."""
+    return db_utils.fetch_masi_from_cb()
+
 def compute_poids_masi():
     """
     Creates a dictionary { valeur: { "capitalisation": X, "poids_masi": Y }, ...}
