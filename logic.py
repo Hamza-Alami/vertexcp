@@ -106,7 +106,7 @@ def create_portfolio_rows(client_name: str, holdings: dict):
     try:
         portfolio_table().upsert(rows, on_conflict="client_id,valeur").execute()
         st.success(f"Portefeuille créé pour '{client_name}'!")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Erreur création du portefeuille: {e}")
 
@@ -236,7 +236,7 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
         f"Achat de {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
         f"coût total {cost_with_comm:,.2f} (commission incluse)."
     )
-    st.experimental_rerun()
+    st.rerun()
 
 def sell_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
     cinfo = get_client_info(client_name)
@@ -312,4 +312,4 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         f"Vendu {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
         f"net {net_proceeds:,.2f} (commission + taxe gains)."
     )
-    st.experimental_rerun()
+    st.rerun()
