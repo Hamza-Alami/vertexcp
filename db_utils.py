@@ -6,6 +6,30 @@ from db_connection import get_supabase_client
 def get_supabase():
     return get_supabase_client()
 
+def fetch_masi_from_cb():
+    """
+    Fetches the JSON from Casablanca Bourse for 'Principaux indices'
+    and returns the current MASI index value as float.
+    If not found, returns 0.0 or raises an exception.
+    """
+    url = "https://www.casablanca-bourse.com/api/proxy/fr/api/bourse/dashboard/grouped_index_watch?"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        # data is a dict: { "data": [ { "title":"Principaux indices", "items":[... ]}, ... ] }
+        # We want to find the item where "index" == "MASI" under "title": "Principaux indices"
+        for block in data.get("data", []):
+            if block.get("title") == "Principaux indices":
+                for item in block.get("items", []):
+                    if item.get("index") == "MASI":
+                        val_str = item.get("field_index_value", "0")
+                        return float(val_str)
+        return 0.0
+    except Exception as e:
+        print("Error fetching MASI index:", e)
+        return 0.0
+
 def fetch_stocks():
     """
     Grabs the 'stocks' DataFrame from the IDBourse API.
@@ -128,7 +152,7 @@ def delete_client(cname):
     except Exception as e:
         st.error(f"Error deleting client: {e}")
 
-def update_client_rates(client_name, exchange_comm, is_pea, custom_tax, mgmt_fee):
+def update_client_rates(client_name, exchange_comm, is_pea, custom_tax, mgmt_fee, bill_surperf):
     import streamlit as st
     cid = get_client_id(client_name)
     if cid is None:
@@ -140,12 +164,13 @@ def update_client_rates(client_name, exchange_comm, is_pea, custom_tax, mgmt_fee
             "exchange_commission_rate": float(exchange_comm),
             "tax_on_gains_rate": final_tax,
             "is_pea": is_pea,
-            "management_fee_rate": float(mgmt_fee)
+            "management_fee_rate": float(mgmt_fee),
+            "bill_surperformance": bool(bill_surperf)
         }).eq("id", cid).execute()
-        st.success(f"Updated rates for {client_name}")
+        st.success(f"Paramètres mis à jour pour {client_name}")
         st.rerun()
     except Exception as e:
-        st.error(f"Error updating client rates: {e}")
+        st.error(f"Erreur lors de la mise à jour: {e}")
 
 def performance_table():
     """
@@ -164,37 +189,29 @@ def create_performance_period(client_id, start_date_str, start_val):
             "client_id": client_id,
             "start_date": start_date_str,
             "start_value": start_val,
+            "masi_start_value": float(masi_start_value)
         }
         client.table("performance_periods").insert(row).execute()
     except Exception as e:
-        st.error(f"DB Error creating performance period: {e}")
+        st.error(f"Erreur lors de la création de la période: {e}")
 
-def get_performance_periods_for_client(client_id: int):
-    """
-    Returns all performance_periods rows for the given client_id, sorted by date DESC.
-    """
-    res = performance_table().select("*").eq("client_id", client_id).order("start_date", desc=True).execute()
-    if res.data:
-        return pd.DataFrame(res.data)
-    return pd.DataFrame(columns=["id","client_id","start_date","start_value","created_at"])
+def get_performance_periods_for_client(client_id):
+    res = client.table("performance_periods").select("*").eq("client_id", client_id).order("start_date", desc=False).execute()
+    df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    return df
 
 def get_latest_performance_period_for_all_clients():
     """
-    For each client that has at least one performance_period entry,
-    fetch the *most recent* row (by start_date) and return them in a DataFrame.
-    We can do this by grouping or by a 2-step approach in Python.
+    For each client, we want the latest (max) start_date row from performance_periods.
+    A naive approach is to fetch all rows, group by client_id, then pick the latest date.
     """
-    # Grab all rows
-    all_res = performance_table().select("*").execute()
-    if not all_res.data:
-        return pd.DataFrame(columns=["client_id","start_date","start_value"])
-    
-    df = pd.DataFrame(all_res.data)
+    res = client.table("performance_periods").select("*").execute()
+    df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
     if df.empty:
-        return df
-    
-    # Sort by (client_id, start_date DESC) so the first row per client is the newest
-    df = df.sort_values(["client_id","start_date"], ascending=[True,False])
-    # group by client_id, take first row => "most recent" per client
-    latest = df.groupby("client_id", as_index=False).head(1)
-    return latest.reset_index(drop=True)
+        return pd.DataFrame()
+    # group by client_id, pick the row with the max start_date
+    df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
+    # sort descending then group
+    df_sorted = df.sort_values(["client_id","start_date"], ascending=[True,False])
+    df_latest = df_sorted.groupby("client_id", as_index=False).head(1)
+    return df_latest
