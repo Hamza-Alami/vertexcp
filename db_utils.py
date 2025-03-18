@@ -158,7 +158,7 @@ def create_client(name: str):
     try:
         client_table().insert({"name": name}).execute()
         st.success(f"Client '{name}' créé avec succès!")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Erreur lors de la création du client: {e}")
 
@@ -173,7 +173,7 @@ def rename_client(old_name: str, new_name: str):
     try:
         client_table().update({"name": new_name}).eq("id", cid).execute()
         st.success(f"Client '{old_name}' renommé en '{new_name}'!")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Erreur lors du renommage: {e}")
 
@@ -186,7 +186,7 @@ def delete_client(cname: str):
     try:
         client_table().delete().eq("id", cid).execute()
         st.success(f"Client '{cname}' supprimé.")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Erreur lors de la suppression du client: {e}")
 
@@ -218,7 +218,7 @@ def update_client_rates(client_name: str,
             "bill_surperformance": bool(bill_surperf)
         }).eq("id", cid).execute()
         st.success(f"Paramètres mis à jour pour « {client_name} ».")
-        st.experimental_rerun()
+        st.rerun()
     except Exception as e:
         st.error(f"Erreur lors de la mise à jour des taux: {e}")
 
