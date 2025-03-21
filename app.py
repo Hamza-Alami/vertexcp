@@ -11,6 +11,11 @@ from pages import (
     page_strategies_and_simulation
 )
 
+def add_sidebar_logo():
+    st.sidebar.image("http://placekitten.com/200/200", width=100)
+    st.sidebar.title("My Company Name")
+
+
 def main():
     page = st.sidebar.selectbox(
         "📂 Navigation",
