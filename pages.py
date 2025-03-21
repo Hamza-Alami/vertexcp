@@ -675,10 +675,10 @@ def page_performance_fees():
 
 
 
+
 ########################################
 # DATABASE FUNCTIONS FOR STRATEGIES
 ########################################
-
 def strategy_table():
     """Return a Supabase table object for 'strategies'."""
     return get_supabase().table("strategies")
@@ -872,28 +872,37 @@ def page_strategies_and_simulation():
             st.info("Aucune stratégie existante.")
 
         st.subheader("Créer une nouvelle stratégie")
-        with st.form("create_strategy_form", clear_on_submit=True):
-            strat_name = st.text_input("Nom de la stratégie")
-            st.write("Définir les poids pour les actions (en %). La somme de ces poids sera allouée aux actions; le reste sera automatiquement attribué au Cash.")
-            stocks_df = fetch_stocks()
-            stock_options = [s for s in stocks_df["valeur"].tolist() if s != "Cash"]
-            target_dict = {}
-            num_stocks = st.number_input("Nombre d'actions à définir", min_value=0, value=0, step=1)
-            for i in range(num_stocks):
-                col1, col2 = st.columns(2)
-                with col1:
-                    stock_sel = st.selectbox(f"Action {i+1}", stock_options, key=f"strat_stock_{i}")
-                with col2:
-                    pct_val = st.number_input(f"Pourcentage pour {stock_sel}", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key=f"strat_pct_{i}")
-                target_dict[stock_sel] = pct_val
-            if st.form_submit_button("Créer la stratégie"):
-                create_strategy(strat_name, target_dict)
+        # --- Strategy creation using a portfolio-like approach ---
+        if "strategy_targets" not in st.session_state:
+            st.session_state.strategy_targets = {}
+
+        col1, col2, col3 = st.columns([3,1,1])
+        stocks_df = fetch_stocks()
+        stock_options = [s for s in stocks_df["valeur"].tolist() if s != "Cash"]
+        with col1:
+            stock_sel = st.selectbox("Sélectionner une action", stock_options, key="new_strat_stock")
+        with col2:
+            weight = st.number_input("Pourcentage", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="new_strat_weight")
+        with col3:
+            if st.button("Ajouter"):
+                st.session_state.strategy_targets[stock_sel] = weight
+                st.success(f"Ajouté {stock_sel} avec {weight}%")
+        st.write("Actions dans la stratégie :", st.session_state.strategy_targets)
+        strat_name = st.text_input("Nom de la stratégie", key="new_strat_name")
+        if st.button("Créer la stratégie"):
+            if strat_name and st.session_state.strategy_targets:
+                create_strategy(strat_name, st.session_state.strategy_targets)
+                st.session_state.strategy_targets = {}
+                st.success("Stratégie créée.")
+            else:
+                st.error("Veuillez entrer un nom et ajouter au moins une action.")
 
         st.subheader("Modifier/Supprimer une stratégie")
         if not strategies_df.empty:
             strat_options = strategies_df["name"].tolist()
             selected_strat_name = st.selectbox("Sélectionner une stratégie", strat_options, key="edit_strat_select")
             selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
+            # Use a form for updating strategy
             with st.form("update_strategy_form", clear_on_submit=True):
                 new_name = st.text_input("Nouveau nom", value=selected_strategy["name"])
                 current_targets = json.loads(selected_strategy["targets"])
@@ -902,13 +911,12 @@ def page_strategies_and_simulation():
                 for stock, pct in current_targets.items():
                     updated_pct = st.number_input(f"{stock} (%)", min_value=0.0, max_value=100.0, value=float(pct), step=0.5, key=f"edit_{stock}")
                     updated_targets[stock] = updated_pct
-                col_del, col_update = st.columns(2)
-                with col_del:
-                    if st.button("Supprimer la stratégie"):
-                        delete_strategy(selected_strategy["id"])
-                with col_update:
-                    if st.form_submit_button("Mettre à jour la stratégie"):
-                        update_strategy(selected_strategy["id"], new_name, updated_targets)
+                update_submitted = st.form_submit_button("Mettre à jour la stratégie")
+            if update_submitted:
+                update_strategy(selected_strategy["id"], new_name, updated_targets)
+            # Place the delete button outside the form
+            if st.button("Supprimer la stratégie"):
+                delete_strategy(selected_strategy["id"])
 
     with tabs[1]:
         st.header("Assignation de Stratégies aux Clients")
@@ -924,7 +932,6 @@ def page_strategies_and_simulation():
                     current_strat_id = current_client.get("strategy_id", None)
                     options = strategies_df["id"].tolist()
                     options_names = strategies_df["name"].tolist()
-                    # Format the selectbox to show strategy names
                     selected_strat_id = st.selectbox(
                         f"Stratégie pour {client}",
                         options=options,
