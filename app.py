@@ -7,7 +7,7 @@ from pages import (
     page_view_all_portfolios,
     page_inventory,
     page_market,
-    page_performance_fees
+    page_performance_fees,
     page_strategies_and_simulation
 )
 
