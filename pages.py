@@ -675,10 +675,10 @@ def page_performance_fees():
 
 
 
-
 ########################################
 # DATABASE FUNCTIONS FOR STRATEGIES
 ########################################
+
 def strategy_table():
     """Return a Supabase table object for 'strategies'."""
     return get_supabase().table("strategies")
@@ -694,7 +694,7 @@ def create_strategy(name, targets):
     """
     Create a new strategy.
     targets: a dictionary mapping asset names to target percentages.
-             (Cash is not entered – it will be auto‑calculated as 100 minus the sum of percentages.)
+             (Cash is not entered – it is auto‑calculated as 100 minus the sum of percentages.)
     """
     try:
         row = {"name": name, "targets": json.dumps(targets)}
@@ -735,121 +735,125 @@ def assign_strategy_to_client(client_name, strategy_id):
         st.error(f"Erreur lors de l'assignation de la stratégie: {e}")
 
 ########################################
-# SIMULATION FUNCTIONS
+# SIMULATION FUNCTIONS AND HELPERS
 ########################################
 
-def simulation_for_client(client_name):
+def simulation_for_client_updated(client_name):
     """
-    Simulate applying the assigned strategy to the client’s portfolio.
-    For each asset, compute the target quantity based on:
-      target_value = total_portfolio_value * (target_percentage/100)
-      target_qty = round(target_value / current_price)
-    Then compute the difference (écart) as: current_qty - target_qty.
-    (A negative écart indicates the client needs to buy shares.)
+    Updated simulation for a single portfolio.
+    Displays a table with columns:
+      Valeur | Cours (Prix) | Quantité actuelle | Poids Actuel (%) | Quantité Cible | Poids Cible (%) | Écart
+    Assets not in the strategy are assumed to have 0% target.
     """
     client = get_client_info(client_name)
     if not client:
         st.error("Client non trouvé.")
         return
-    if "strategy_id" not in client or not client["strategy_id"]:
-        st.info("Aucune stratégie assignée à ce client.")
-        return
-
-    st.write(f"Simulation pour {client_name} avec stratégie ID {client['strategy_id']}")
     strategies_df = get_strategies()
-    strategy = strategies_df[strategies_df["id"] == client["strategy_id"]]
-    if strategy.empty:
-        st.error("Stratégie non trouvée.")
-        return
-    strategy = strategy.iloc[0]
-    # Load target percentages (targets is stored as JSON)
-    targets = json.loads(strategy["targets"])
-    # Cash percentage is auto‑calculated
-    sum_targets = sum(targets.values())
-    cash_pct = 100 - sum_targets
-    targets["Cash"] = cash_pct
-
-    # Get the client's portfolio and current prices
+    # If the client has a strategy, get its targets; otherwise assume empty
+    if "strategy_id" in client and client["strategy_id"]:
+        strat = strategies_df[strategies_df["id"] == client["strategy_id"]]
+        targets = json.loads(strat.iloc[0]["targets"]) if not strat.empty else {}
+    else:
+        targets = {}
+    # Ensure all assets in the portfolio appear: if an asset is not in targets, its target is 0.
     pf = get_portfolio(client_name)
     if pf.empty:
         st.error("Portefeuille vide pour ce client.")
         return
     stocks_df = fetch_stocks()
-
-    # Compute total portfolio value
+    # Compute total portfolio value based on current prices
     total_val = 0.0
+    portfolio_assets = {}
     for _, row in pf.iterrows():
         asset = row["valeur"]
         qty = float(row["quantité"])
         price = 1.0 if asset == "Cash" else float(stocks_df[stocks_df["valeur"] == asset]["cours"].iloc[0])
         total_val += qty * price
-
-    st.write(f"**Valeur totale du portefeuille :** {total_val:,.2f}")
-
-    # Build a simulation table
+        portfolio_assets[asset] = {"qty": qty, "price": price}
+    # Build simulation rows for the union of portfolio assets and strategy targets
     sim_rows = []
-    for asset, pct in targets.items():
-        target_value = total_val * (pct / 100.0)
+    all_assets = set(portfolio_assets.keys()).union(set(targets.keys()))
+    for asset in all_assets:
+        current_qty = portfolio_assets[asset]["qty"] if asset in portfolio_assets else 0
+        price = portfolio_assets[asset]["price"] if asset in portfolio_assets else (1.0 if asset=="Cash" else 0.0)
+        current_value = current_qty * price
+        current_weight = (current_value / total_val * 100) if total_val > 0 else 0
+        target_pct = targets.get(asset, 0)
         if asset == "Cash":
-            price = 1.0
-        else:
-            df_asset = stocks_df[stocks_df["valeur"] == asset]
-            if df_asset.empty:
-                st.warning(f"Prix pour {asset} non trouvé.")
-                price = 0.0
-            else:
-                price = float(df_asset["cours"].iloc[0])
-        target_qty = int(round(target_value / price)) if price > 0 else 0
-        current_qty = 0
-        match = pf[pf["valeur"] == asset]
-        if not match.empty:
-            current_qty = int(match["quantité"].iloc[0])
-        # Écart = (quantité actuelle - quantité cible)
+            target_pct = 100 - sum(targets.values())
+        target_value = total_val * (target_pct / 100)
+        target_qty = round(target_value / price) if price > 0 else 0
         ecart = current_qty - target_qty
         sim_rows.append({
             "Valeur": asset,
-            "Cible (%)": pct,
-            "Prix": price,
-            "Quantité cible": target_qty,
+            "Cours (Prix)": price,
             "Quantité actuelle": current_qty,
+            "Poids Actuel (%)": round(current_weight, 2),
+            "Quantité Cible": target_qty,
+            "Poids Cible (%)": target_pct,
             "Écart": ecart
         })
     sim_df = pd.DataFrame(sim_rows)
+    sim_df = sim_df[["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"]]
     st.dataframe(sim_df, use_container_width=True)
 
-def aggregated_cash_simulation():
+def aggregate_portfolios(client_list):
     """
-    A tool to select one or more clients, choose a stock and input a price,
-    then calculate the total cash available (from each portfolio’s "Cash" position)
-    and how many shares of the selected stock could be purchased.
+    Aggregate portfolios for a list of clients.
+    Returns a DataFrame with aggregated quantities per asset.
     """
-    st.subheader("Simulation agrégée de cash")
-    clients = get_all_clients()
-    selected_clients = st.multiselect("Sélectionner des clients", clients)
-    if not selected_clients:
-        st.info("Sélectionnez au moins un client.")
-        return
-    stocks_df = fetch_stocks()
-    stock_list = stocks_df["valeur"].tolist()
-    selected_stock = st.selectbox("Sélectionner une valeur pour la simulation", stock_list)
-    default_price = 0.0
-    df_stock = stocks_df[stocks_df["valeur"] == selected_stock]
-    if not df_stock.empty:
-        default_price = float(df_stock["cours"].iloc[0])
-    price_input = st.number_input("Prix à utiliser", value=default_price, step=0.01)
-    total_cash = 0.0
-    for client in selected_clients:
+    agg = {}
+    for client in client_list:
         pf = get_portfolio(client)
         if not pf.empty:
-            cash_row = pf[pf["valeur"] == "Cash"]
-            if not cash_row.empty:
-                total_cash += float(cash_row["quantité"].iloc[0])
-    st.write(f"**Total cash disponible :** {total_cash:,.2f}")
-    if price_input > 0:
-        shares_buyable = int(total_cash // price_input)
-        st.write(f"Nombre de {selected_stock} pouvant être achetées : {shares_buyable}")
-    else:
-        st.error("Prix invalide.")
+            for _, row in pf.iterrows():
+                asset = row["valeur"]
+                qty = float(row["quantité"])
+                agg[asset] = agg.get(asset, 0) + qty
+    return pd.DataFrame(list(agg.items()), columns=["valeur", "quantité"])
+
+def simulation_for_aggregated(agg_pf, strategy):
+    """
+    Run simulation on aggregated portfolio.
+    Uses the same columns as the single portfolio simulation.
+    """
+    targets = json.loads(strategy["targets"])
+    targets["Cash"] = 100 - sum(targets.values())
+    stocks_df = fetch_stocks()
+    total_val = 0.0
+    portfolio_assets = {}
+    for _, row in agg_pf.iterrows():
+        asset = row["valeur"]
+        qty = float(row["quantité"])
+        price = 1.0 if asset=="Cash" else float(stocks_df[stocks_df["valeur"]==asset]["cours"].iloc[0])
+        total_val += qty * price
+        portfolio_assets[asset] = {"qty": qty, "price": price}
+    sim_rows = []
+    all_assets = set(portfolio_assets.keys()).union(set(targets.keys()))
+    for asset in all_assets:
+        current_qty = portfolio_assets[asset]["qty"] if asset in portfolio_assets else 0
+        price = portfolio_assets[asset]["price"] if asset in portfolio_assets else (1.0 if asset=="Cash" else 0.0)
+        current_value = current_qty * price
+        current_weight = (current_value / total_val * 100) if total_val > 0 else 0
+        target_pct = targets.get(asset, 0)
+        if asset=="Cash":
+            target_pct = 100 - sum(targets[k] for k in targets if k!="Cash")
+        target_value = total_val * (target_pct / 100)
+        target_qty = round(target_value / price) if price > 0 else 0
+        ecart = current_qty - target_qty
+        sim_rows.append({
+            "Valeur": asset,
+            "Cours (Prix)": price,
+            "Quantité actuelle": current_qty,
+            "Poids Actuel (%)": round(current_weight, 2),
+            "Quantité Cible": target_qty,
+            "Poids Cible (%)": target_pct,
+            "Écart": ecart
+        })
+    sim_df = pd.DataFrame(sim_rows)
+    sim_df = sim_df[["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"]]
+    st.dataframe(sim_df, use_container_width=True)
 
 ########################################
 # PAGE: Stratégies et Simulation
@@ -857,67 +861,103 @@ def aggregated_cash_simulation():
 
 def page_strategies_and_simulation():
     st.title("Stratégies et Simulation")
-    tabs = st.tabs(["Gestion des Stratégies", "Assignation aux Clients", "Simulation par Client", "Simulation Agrégée"])
+    tabs = st.tabs(["Gestion des Stratégies", "Assignation aux Clients", "Simulation de Stratégie"])
 
+    # Tab 0: Gestion des Stratégies
     with tabs[0]:
-        st.header("Gestion des Stratégies")
-        # List existing strategies
-        strategies_df = get_strategies()
-        if not strategies_df.empty:
-            st.write("Stratégies existantes :")
-            df_disp = strategies_df.copy()
-            df_disp["targets"] = df_disp["targets"].apply(lambda x: json.loads(x))
-            st.dataframe(df_disp, use_container_width=True)
-        else:
-            st.info("Aucune stratégie existante.")
-
-        st.subheader("Créer une nouvelle stratégie")
-        # --- Strategy creation using a portfolio-like approach ---
-        if "strategy_targets" not in st.session_state:
-            st.session_state.strategy_targets = {}
-
-        col1, col2, col3 = st.columns([3,1,1])
-        stocks_df = fetch_stocks()
-        stock_options = [s for s in stocks_df["valeur"].tolist() if s != "Cash"]
-        with col1:
-            stock_sel = st.selectbox("Sélectionner une action", stock_options, key="new_strat_stock")
-        with col2:
-            weight = st.number_input("Pourcentage", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="new_strat_weight")
-        with col3:
-            if st.button("Ajouter"):
-                st.session_state.strategy_targets[stock_sel] = weight
-                st.success(f"Ajouté {stock_sel} avec {weight}%")
-        st.write("Actions dans la stratégie :", st.session_state.strategy_targets)
-        strat_name = st.text_input("Nom de la stratégie", key="new_strat_name")
-        if st.button("Créer la stratégie"):
-            if strat_name and st.session_state.strategy_targets:
-                create_strategy(strat_name, st.session_state.strategy_targets)
-                st.session_state.strategy_targets = {}
-                st.success("Stratégie créée.")
+        with st.expander("Stratégies existantes", expanded=False):
+            strategies_df = get_strategies()
+            if not strategies_df.empty:
+                display_rows = []
+                for _, row in strategies_df.iterrows():
+                    targets = json.loads(row["targets"])
+                    cash = 100 - sum(targets.values())
+                    targets["Cash"] = cash
+                    details = ", ".join([f"{k}: {v}%" for k, v in targets.items()])
+                    display_rows.append({"Nom": row["name"], "Détails": details})
+                st.table(pd.DataFrame(display_rows))
             else:
-                st.error("Veuillez entrer un nom et ajouter au moins une action.")
+                st.info("Aucune stratégie existante.")
 
-        st.subheader("Modifier/Supprimer une stratégie")
-        if not strategies_df.empty:
-            strat_options = strategies_df["name"].tolist()
-            selected_strat_name = st.selectbox("Sélectionner une stratégie", strat_options, key="edit_strat_select")
-            selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
-            # Use a form for updating strategy
-            with st.form("update_strategy_form", clear_on_submit=True):
-                new_name = st.text_input("Nouveau nom", value=selected_strategy["name"])
+        with st.expander("Créer une nouvelle stratégie", expanded=False):
+            if "new_strategy_targets" not in st.session_state:
+                st.session_state.new_strategy_targets = {}
+            col1, col2, col3 = st.columns([3,1,1])
+            stocks_df = fetch_stocks()
+            stock_options = [s for s in stocks_df["valeur"].tolist() if s != "Cash"]
+            with col1:
+                new_stock = st.selectbox("Action à ajouter", stock_options, key="new_strat_stock_create")
+            with col2:
+                new_weight = st.number_input("Pourcentage", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="new_strat_weight_create")
+            with col3:
+                if st.button("Ajouter"):
+                    st.session_state.new_strategy_targets[new_stock] = new_weight
+                    st.success(f"{new_stock} ajouté avec {new_weight}%")
+            if st.session_state.new_strategy_targets:
+                df_new = pd.DataFrame(list(st.session_state.new_strategy_targets.items()), columns=["Action", "Pourcentage"])
+                total_weight = df_new["Pourcentage"].sum()
+                cash_pct = 100 - total_weight
+                df_display = df_new.copy()
+                df_display = df_display.append({"Action": "Cash", "Pourcentage": cash_pct}, ignore_index=True)
+                st.table(df_display)
+                if total_weight > 100:
+                    st.error(f"Total dépasse 100% de {total_weight - 100}%.")
+            strat_name_new = st.text_input("Nom de la stratégie", key="new_strat_name")
+            if st.button("Créer la stratégie"):
+                if not strat_name_new:
+                    st.error("Veuillez entrer un nom pour la stratégie.")
+                elif not st.session_state.new_strategy_targets:
+                    st.error("Veuillez ajouter au moins une action.")
+                elif sum(st.session_state.new_strategy_targets.values()) > 100:
+                    st.error("Le total des pourcentages dépasse 100%.")
+                else:
+                    create_strategy(strat_name_new, st.session_state.new_strategy_targets)
+                    st.session_state.new_strategy_targets = {}
+                    st.success("Stratégie créée.")
+
+        with st.expander("Modifier/Supprimer une stratégie", expanded=False):
+            strategies_df = get_strategies()
+            if not strategies_df.empty:
+                strat_options = strategies_df["name"].tolist()
+                selected_strat_name = st.selectbox("Sélectionner une stratégie à modifier", strat_options, key="edit_strat_select")
+                selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
                 current_targets = json.loads(selected_strategy["targets"])
-                st.write("Modifier les poids :")
+                st.write("Actions actuelles dans la stratégie:")
                 updated_targets = {}
-                for stock, pct in current_targets.items():
-                    updated_pct = st.number_input(f"{stock} (%)", min_value=0.0, max_value=100.0, value=float(pct), step=0.5, key=f"edit_{stock}")
-                    updated_targets[stock] = updated_pct
-                update_submitted = st.form_submit_button("Mettre à jour la stratégie")
-            if update_submitted:
-                update_strategy(selected_strategy["id"], new_name, updated_targets)
-            # Place the delete button outside the form
-            if st.button("Supprimer la stratégie"):
-                delete_strategy(selected_strategy["id"])
+                for action, pct in current_targets.items():
+                    colA, colB, colC = st.columns([3,1,1])
+                    with colA:
+                        new_pct = st.number_input(f"{action} (%)", min_value=0.0, max_value=100.0, value=float(pct), step=0.5, key=f"edit_{action}")
+                    with colB:
+                        remove = st.checkbox(f"Supprimer {action}", key=f"remove_{action}")
+                    if not remove:
+                        updated_targets[action] = new_pct
+                st.write("Ajouter une nouvelle action:")
+                colD, colE = st.columns(2)
+                with colD:
+                    add_action = st.selectbox("Nouvelle action", stock_options, key="add_strat_stock")
+                with colE:
+                    add_pct = st.number_input("Pourcentage", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="add_strat_pct")
+                if st.button("Ajouter action"):
+                    if add_action in updated_targets:
+                        st.error("Action déjà présente.")
+                    else:
+                        updated_targets[add_action] = add_pct
+                        st.success(f"{add_action} ajouté avec {add_pct}%")
+                total_updated = sum(updated_targets.values())
+                cash_updated = 100 - total_updated
+                display_df = pd.DataFrame(list(updated_targets.items()), columns=["Action", "Pourcentage"])
+                display_df = display_df.append({"Action": "Cash", "Pourcentage": cash_updated}, ignore_index=True)
+                st.table(display_df)
+                if st.button("Mettre à jour la stratégie"):
+                    if total_updated > 100:
+                        st.error(f"Le total dépasse 100% de {total_updated - 100}%.")
+                    else:
+                        update_strategy(selected_strategy["id"], selected_strat_name, updated_targets)
+            else:
+                st.info("Aucune stratégie à modifier.")
 
+    # Tab 1: Assignation aux Clients (remains unchanged)
     with tabs[1]:
         st.header("Assignation de Stratégies aux Clients")
         clients = get_all_clients()
@@ -944,14 +984,27 @@ def page_strategies_and_simulation():
         else:
             st.info("Assurez-vous qu'il existe à la fois des clients et des stratégies.")
 
+    # Tab 2: Simulation de Stratégie
     with tabs[2]:
-        st.header("Simulation par Client")
-        client_sim = st.selectbox("Sélectionner un client pour simulation", get_all_clients())
-        if client_sim:
-            simulation_for_client(client_sim)
-
-    with tabs[3]:
-        aggregated_cash_simulation()
+        st.header("Simulation de Stratégie")
+        mode = st.radio("Mode de simulation", options=["Portefeuille Unique", "Portefeuille Multiple"], key="sim_mode")
+        if mode == "Portefeuille Unique":
+            client_sim = st.selectbox("Sélectionner un client", get_all_clients(), key="sim_client")
+            if client_sim:
+                simulation_for_client_updated(client_sim)
+        else:
+            st.write("Simulation pour plusieurs portefeuilles (agrégés) de la même stratégie")
+            strategies_df = get_strategies()
+            strat_choice = st.selectbox("Sélectionnez une stratégie", strategies_df["name"].tolist(), key="multi_strat")
+            selected_strategy = strategies_df[strategies_df["name"] == strat_choice].iloc[0]
+            all_clients = get_all_clients()
+            clients_with_strat = [c for c in all_clients if get_client_info(c).get("strategy_id") == selected_strategy["id"]]
+            if not clients_with_strat:
+                st.info("Aucun client n'est assigné à cette stratégie.")
+            else:
+                st.write("Clients assignés:", clients_with_strat)
+                agg_pf = aggregate_portfolios(clients_with_strat)
+                simulation_for_aggregated(agg_pf, selected_strategy)
 
 # Expose the page function
 if __name__ == "__main__":
