@@ -11,10 +11,6 @@ from pages import (
     page_strategies_and_simulation
 )
 
-def add_sidebar_logo():
-    st.sidebar.image("http://placekitten.com/200/200", width=100)
-    st.sidebar.title("My Company Name")
-
 
 def main():
     page = st.sidebar.selectbox(
@@ -46,6 +42,10 @@ def main():
         page_performance_fees() 
     elif page == "Stratégies et Simulation":
         page_strategies_and_simulation()
+
+def add_sidebar_logo():
+    st.sidebar.image("http://placekitten.com/200/200", width=100)
+    st.sidebar.title("My Company Name")
 
 if __name__ == "__main__":
     main()
