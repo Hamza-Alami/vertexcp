@@ -11,8 +11,8 @@ from pages import (
 )
 
 def add_sidebar_logo():
-    st.sidebar.image("http://placekitten.com/200/200", width=100)
-    st.sidebar.title("My Company Name")
+    st.sidebar.image("https://www.google.com/url?sa=i&url=https%3A%2F%2Fwww.pinterest.com%2Fpin%2Fmemes--61713457387329952%2F&psig=AOvVaw1TFNO2JnBV6TAc84tFM-Lo&ust=1742658940882000&source=images&cd=vfe&opi=89978449&ved=0CBQQjRxqFwoTCMjsvczEm4wDFQAAAAAdAAAAABAE", width=100)
+    st.sidebar.title("Retard Asset Management")
 
 def main():
     # Add logo and title to sidebar
