@@ -898,7 +898,7 @@ def page_strategies_and_simulation():
                 total_weight = df_new["Pourcentage"].sum()
                 cash_pct = 100 - total_weight
                 df_display = df_new.copy()
-                df_display = df_display.append({"Action": "Cash", "Pourcentage": cash_pct}, ignore_index=True)
+                df_display = pd.concat([df_new, pd.DataFrame([{"Action": "Cash", "Pourcentage": cash_pct}])], ignore_index=True)
                 st.table(df_display)
                 if total_weight > 100:
                     st.error(f"Total dépasse 100% de {total_weight - 100}%.")
