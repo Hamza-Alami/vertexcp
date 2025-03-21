@@ -11,7 +11,7 @@ from pages import (
 )
 
 def add_sidebar_logo():
-    st.sidebar.image("https://www.ft.com/__origami/service/image/v2/images/raw/https%3A%2F%2Fd1e00ek4ebabms.cloudfront.net%2Fproduction%2F9350e59a-ae82-4e65-a9df-54c0c94d67aa.png?source=next-article&fit=scale-down&quality=highest&width=700&dpr=1", width=300)
+    st.sidebar.image("https://www.axiom-am.com/images/logo.svg", width=300)
     st.sidebar.title("Retard Asset Management")
 
 def main():
