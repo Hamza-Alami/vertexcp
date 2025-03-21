@@ -669,3 +669,280 @@ def page_performance_fees():
                 }])
                 st.write("#### Totaux Globaux")
                 st.dataframe(df_tots.style.format("{:,.2f}"), use_container_width=True)
+
+
+
+########################################
+# DATABASE FUNCTIONS FOR STRATEGIES
+########################################
+
+def strategy_table():
+    """Return a Supabase table object for 'strategies'."""
+    return get_supabase().table("strategies")
+
+def get_strategies():
+    """Retrieve all strategies as a DataFrame."""
+    res = strategy_table().select("*").execute()
+    if not res.data:
+        return pd.DataFrame()
+    return pd.DataFrame(res.data)
+
+def create_strategy(name, targets):
+    """
+    Create a new strategy.
+    targets: a dictionary mapping asset names to target percentages.
+             (Cash is not entered – it will be auto‑calculated as 100 minus the sum of percentages.)
+    """
+    try:
+        row = {"name": name, "targets": json.dumps(targets)}
+        strategy_table().insert(row).execute()
+        st.success(f"Stratégie '{name}' créée avec succès.")
+    except Exception as e:
+        st.error(f"Erreur lors de la création de la stratégie: {e}")
+
+def update_strategy(strategy_id, name, targets):
+    try:
+        row = {"name": name, "targets": json.dumps(targets)}
+        strategy_table().update(row).eq("id", strategy_id).execute()
+        st.success("Stratégie mise à jour avec succès.")
+    except Exception as e:
+        st.error(f"Erreur lors de la mise à jour de la stratégie: {e}")
+
+def delete_strategy(strategy_id):
+    try:
+        strategy_table().delete().eq("id", strategy_id).execute()
+        st.success("Stratégie supprimée avec succès.")
+    except Exception as e:
+        st.error(f"Erreur lors de la suppression de la stratégie: {e}")
+
+def assign_strategy_to_client(client_name, strategy_id):
+    """
+    Assign a strategy to a client by updating the client's record.
+    (This assumes you have added a column "strategy_id" in your clients table.)
+    """
+    from db_utils import client_table
+    cid = get_client_id(client_name)
+    if cid is None:
+        st.error("Client introuvable.")
+        return
+    try:
+        client_table().update({"strategy_id": strategy_id}).eq("id", cid).execute()
+        st.success(f"Stratégie assignée à {client_name}.")
+    except Exception as e:
+        st.error(f"Erreur lors de l'assignation de la stratégie: {e}")
+
+########################################
+# SIMULATION FUNCTIONS
+########################################
+
+def simulation_for_client(client_name):
+    """
+    Simulate applying the assigned strategy to the client’s portfolio.
+    For each asset, compute the target quantity based on:
+      target_value = total_portfolio_value * (target_percentage/100)
+      target_qty = round(target_value / current_price)
+    Then compute the difference (écart) as: current_qty - target_qty.
+    (A negative écart indicates the client needs to buy shares.)
+    """
+    client = get_client_info(client_name)
+    if not client:
+        st.error("Client non trouvé.")
+        return
+    if "strategy_id" not in client or not client["strategy_id"]:
+        st.info("Aucune stratégie assignée à ce client.")
+        return
+
+    st.write(f"Simulation pour {client_name} avec stratégie ID {client['strategy_id']}")
+    strategies_df = get_strategies()
+    strategy = strategies_df[strategies_df["id"] == client["strategy_id"]]
+    if strategy.empty:
+        st.error("Stratégie non trouvée.")
+        return
+    strategy = strategy.iloc[0]
+    # Load target percentages (targets is stored as JSON)
+    targets = json.loads(strategy["targets"])
+    # Cash percentage is auto‑calculated
+    sum_targets = sum(targets.values())
+    cash_pct = 100 - sum_targets
+    targets["Cash"] = cash_pct
+
+    # Get the client's portfolio and current prices
+    pf = get_portfolio(client_name)
+    if pf.empty:
+        st.error("Portefeuille vide pour ce client.")
+        return
+    stocks_df = fetch_stocks()
+
+    # Compute total portfolio value
+    total_val = 0.0
+    for _, row in pf.iterrows():
+        asset = row["valeur"]
+        qty = float(row["quantité"])
+        price = 1.0 if asset == "Cash" else float(stocks_df[stocks_df["valeur"] == asset]["cours"].iloc[0])
+        total_val += qty * price
+
+    st.write(f"**Valeur totale du portefeuille :** {total_val:,.2f}")
+
+    # Build a simulation table
+    sim_rows = []
+    for asset, pct in targets.items():
+        target_value = total_val * (pct / 100.0)
+        if asset == "Cash":
+            price = 1.0
+        else:
+            df_asset = stocks_df[stocks_df["valeur"] == asset]
+            if df_asset.empty:
+                st.warning(f"Prix pour {asset} non trouvé.")
+                price = 0.0
+            else:
+                price = float(df_asset["cours"].iloc[0])
+        target_qty = int(round(target_value / price)) if price > 0 else 0
+        current_qty = 0
+        match = pf[pf["valeur"] == asset]
+        if not match.empty:
+            current_qty = int(match["quantité"].iloc[0])
+        # Écart = (quantité actuelle - quantité cible)
+        ecart = current_qty - target_qty
+        sim_rows.append({
+            "Valeur": asset,
+            "Cible (%)": pct,
+            "Prix": price,
+            "Quantité cible": target_qty,
+            "Quantité actuelle": current_qty,
+            "Écart": ecart
+        })
+    sim_df = pd.DataFrame(sim_rows)
+    st.dataframe(sim_df, use_container_width=True)
+
+def aggregated_cash_simulation():
+    """
+    A tool to select one or more clients, choose a stock and input a price,
+    then calculate the total cash available (from each portfolio’s "Cash" position)
+    and how many shares of the selected stock could be purchased.
+    """
+    st.subheader("Simulation agrégée de cash")
+    clients = get_all_clients()
+    selected_clients = st.multiselect("Sélectionner des clients", clients)
+    if not selected_clients:
+        st.info("Sélectionnez au moins un client.")
+        return
+    stocks_df = fetch_stocks()
+    stock_list = stocks_df["valeur"].tolist()
+    selected_stock = st.selectbox("Sélectionner une valeur pour la simulation", stock_list)
+    default_price = 0.0
+    df_stock = stocks_df[stocks_df["valeur"] == selected_stock]
+    if not df_stock.empty:
+        default_price = float(df_stock["cours"].iloc[0])
+    price_input = st.number_input("Prix à utiliser", value=default_price, step=0.01)
+    total_cash = 0.0
+    for client in selected_clients:
+        pf = get_portfolio(client)
+        if not pf.empty:
+            cash_row = pf[pf["valeur"] == "Cash"]
+            if not cash_row.empty:
+                total_cash += float(cash_row["quantité"].iloc[0])
+    st.write(f"**Total cash disponible :** {total_cash:,.2f}")
+    if price_input > 0:
+        shares_buyable = int(total_cash // price_input)
+        st.write(f"Nombre de {selected_stock} pouvant être achetées : {shares_buyable}")
+    else:
+        st.error("Prix invalide.")
+
+########################################
+# PAGE: Stratégies et Simulation
+########################################
+
+def page_strategies_and_simulation():
+    st.title("Stratégies et Simulation")
+    tabs = st.tabs(["Gestion des Stratégies", "Assignation aux Clients", "Simulation par Client", "Simulation Agrégée"])
+
+    with tabs[0]:
+        st.header("Gestion des Stratégies")
+        # List existing strategies
+        strategies_df = get_strategies()
+        if not strategies_df.empty:
+            st.write("Stratégies existantes :")
+            df_disp = strategies_df.copy()
+            df_disp["targets"] = df_disp["targets"].apply(lambda x: json.loads(x))
+            st.dataframe(df_disp, use_container_width=True)
+        else:
+            st.info("Aucune stratégie existante.")
+
+        st.subheader("Créer une nouvelle stratégie")
+        with st.form("create_strategy_form", clear_on_submit=True):
+            strat_name = st.text_input("Nom de la stratégie")
+            st.write("Définir les poids pour les actions (en %). La somme de ces poids sera allouée aux actions; le reste sera automatiquement attribué au Cash.")
+            stocks_df = fetch_stocks()
+            stock_options = [s for s in stocks_df["valeur"].tolist() if s != "Cash"]
+            target_dict = {}
+            num_stocks = st.number_input("Nombre d'actions à définir", min_value=0, value=0, step=1)
+            for i in range(num_stocks):
+                col1, col2 = st.columns(2)
+                with col1:
+                    stock_sel = st.selectbox(f"Action {i+1}", stock_options, key=f"strat_stock_{i}")
+                with col2:
+                    pct_val = st.number_input(f"Pourcentage pour {stock_sel}", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key=f"strat_pct_{i}")
+                target_dict[stock_sel] = pct_val
+            if st.form_submit_button("Créer la stratégie"):
+                create_strategy(strat_name, target_dict)
+
+        st.subheader("Modifier/Supprimer une stratégie")
+        if not strategies_df.empty:
+            strat_options = strategies_df["name"].tolist()
+            selected_strat_name = st.selectbox("Sélectionner une stratégie", strat_options, key="edit_strat_select")
+            selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
+            with st.form("update_strategy_form", clear_on_submit=True):
+                new_name = st.text_input("Nouveau nom", value=selected_strategy["name"])
+                current_targets = json.loads(selected_strategy["targets"])
+                st.write("Modifier les poids :")
+                updated_targets = {}
+                for stock, pct in current_targets.items():
+                    updated_pct = st.number_input(f"{stock} (%)", min_value=0.0, max_value=100.0, value=float(pct), step=0.5, key=f"edit_{stock}")
+                    updated_targets[stock] = updated_pct
+                col_del, col_update = st.columns(2)
+                with col_del:
+                    if st.button("Supprimer la stratégie"):
+                        delete_strategy(selected_strategy["id"])
+                with col_update:
+                    if st.form_submit_button("Mettre à jour la stratégie"):
+                        update_strategy(selected_strategy["id"], new_name, updated_targets)
+
+    with tabs[1]:
+        st.header("Assignation de Stratégies aux Clients")
+        clients = get_all_clients()
+        strategies_df = get_strategies()
+        if not strategies_df.empty and clients:
+            for client in clients:
+                col1, col2 = st.columns([2, 2])
+                with col1:
+                    st.write(client)
+                with col2:
+                    current_client = get_client_info(client)
+                    current_strat_id = current_client.get("strategy_id", None)
+                    options = strategies_df["id"].tolist()
+                    options_names = strategies_df["name"].tolist()
+                    # Format the selectbox to show strategy names
+                    selected_strat_id = st.selectbox(
+                        f"Stratégie pour {client}",
+                        options=options,
+                        format_func=lambda x: options_names[options.index(x)] if x in options else "None",
+                        index=options.index(current_strat_id) if current_strat_id in options else 0,
+                        key=f"assign_{client}"
+                    )
+                    if st.button(f"Assigner la stratégie à {client}", key=f"assign_btn_{client}"):
+                        assign_strategy_to_client(client, selected_strat_id)
+        else:
+            st.info("Assurez-vous qu'il existe à la fois des clients et des stratégies.")
+
+    with tabs[2]:
+        st.header("Simulation par Client")
+        client_sim = st.selectbox("Sélectionner un client pour simulation", get_all_clients())
+        if client_sim:
+            simulation_for_client(client_sim)
+
+    with tabs[3]:
+        aggregated_cash_simulation()
+
+# Expose the page function
+if __name__ == "__main__":
+    page_strategies_and_simulation()
