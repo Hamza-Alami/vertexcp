@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
-import json  # <-- Added for JSON operations
+import json  
 from collections import defaultdict
 from datetime import date
 
-import db_utils  # your utilities
+import db_utils 
 from db_utils import (
     get_all_clients,
     get_client_id,
@@ -15,11 +15,11 @@ from db_utils import (
     update_client_rates,
     client_has_portfolio,
     get_portfolio,
-    get_supabase,  # <-- Added this line
-    # Performance
+    get_supabase, 
     get_performance_periods_for_client,
     create_performance_period,
     get_latest_performance_period_for_all_clients,
+    fetch_stocks
 )
 from logic import (
     buy_shares,
