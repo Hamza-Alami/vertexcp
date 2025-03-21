@@ -7,7 +7,8 @@ from pages import (
     page_view_all_portfolios,
     page_inventory,
     page_market,
-    page_performance_fees  # new import
+    page_performance_fees
+    page_strategies_and_simulation
 )
 
 def main():
@@ -17,10 +18,11 @@ def main():
             "Gestion des clients",
             "Créer un Portefeuille",
             "Gérer un Portefeuille",
+            "Stratégies et Simulation",
             "Voir tout les portefeuilles",
             "Inventaire",
             "Marché",
-            "Performance & Fees"  # Add new
+            "Performance & Fees"
         ]
     )
     if page == "Gestion des clients":
@@ -36,7 +38,9 @@ def main():
     elif page == "Marché":
         page_market()
     elif page == "Performance & Fees":
-        page_performance_fees()  # call new function
+        page_performance_fees() 
+    elif page == "Stratégies et Simulation":
+        page_strategies_and_simulation()
 
 if __name__ == "__main__":
     main()
