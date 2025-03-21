@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import json  # <-- Added for JSON operations
 from collections import defaultdict
 from datetime import date
 
@@ -14,6 +15,7 @@ from db_utils import (
     update_client_rates,
     client_has_portfolio,
     get_portfolio,
+    get_supabase,  # <-- Added this line
     # Performance
     get_performance_periods_for_client,
     create_performance_period,
@@ -26,6 +28,7 @@ from logic import (
     poids_masi_map,
     get_current_masi
 )
+
 
 ########################################
 # 1) Manage Clients Page
