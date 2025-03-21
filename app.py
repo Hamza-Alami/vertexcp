@@ -12,7 +12,7 @@ from pages import (
 
 def add_sidebar_logo():
     st.sidebar.image("https://www.axiom-am.com/images/logo.svg", width=50)
-    st.sidebar.title("Retard Asset Management")
+    st.sidebar.title("AXIOM Asset Management")
 
 def main():
     # Add logo and title to sidebar
