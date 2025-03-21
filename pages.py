@@ -859,6 +859,124 @@ def simulation_for_aggregated(agg_pf, strategy):
 # PAGE: Stratégies et Simulation
 ########################################
 
+def simulation_for_client_updated(client_name):
+    """
+    Updated simulation for a single portfolio.
+    Displays a table with columns:
+      Valeur | Cours (Prix) | Quantité actuelle | Poids Actuel (%) | Quantité Cible | Poids Cible (%) | Écart
+    Assets not in the strategy are assumed to have 0% target.
+    """
+    client = get_client_info(client_name)
+    if not client:
+        st.error("Client non trouvé.")
+        return
+    strategies_df = get_strategies()
+    if "strategy_id" in client and client["strategy_id"]:
+        strat = strategies_df[strategies_df["id"] == client["strategy_id"]]
+        targets = json.loads(strat.iloc[0]["targets"]) if not strat.empty else {}
+    else:
+        targets = {}
+    pf = get_portfolio(client_name)
+    if pf.empty:
+        st.error("Portefeuille vide pour ce client.")
+        return
+    stocks_df = fetch_stocks()
+    total_val = 0.0
+    portfolio_assets = {}
+    for _, row in pf.iterrows():
+        asset = row["valeur"]
+        qty = float(row["quantité"])
+        price = 1.0 if asset == "Cash" else float(stocks_df[stocks_df["valeur"] == asset]["cours"].iloc[0])
+        total_val += qty * price
+        portfolio_assets[asset] = {"qty": qty, "price": price}
+    sim_rows = []
+    all_assets = set(portfolio_assets.keys()).union(set(targets.keys()))
+    for asset in all_assets:
+        current_qty = portfolio_assets[asset]["qty"] if asset in portfolio_assets else 0
+        price = portfolio_assets[asset]["price"] if asset in portfolio_assets else (1.0 if asset=="Cash" else 0.0)
+        current_value = current_qty * price
+        current_weight = (current_value / total_val * 100) if total_val > 0 else 0
+        target_pct = targets.get(asset, 0)
+        if asset == "Cash":
+            target_pct = 100 - sum(targets.values())
+        target_value = total_val * (target_pct / 100)
+        target_qty = round(target_value / price) if price > 0 else 0
+        ecart = current_qty - target_qty
+        sim_rows.append({
+            "Valeur": asset,
+            "Cours (Prix)": price,
+            "Quantité actuelle": current_qty,
+            "Poids Actuel (%)": round(current_weight, 2),
+            "Quantité Cible": target_qty,
+            "Poids Cible (%)": target_pct,
+            "Écart": ecart
+        })
+    sim_df = pd.DataFrame(sim_rows)
+    sim_df = sim_df[["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"]]
+    st.dataframe(sim_df, use_container_width=True)
+
+def aggregate_portfolios(client_list):
+    """
+    Aggregate portfolios for a list of clients.
+    Returns a DataFrame with aggregated quantities per asset.
+    """
+    agg = {}
+    for client in client_list:
+        pf = get_portfolio(client)
+        if not pf.empty:
+            for _, row in pf.iterrows():
+                asset = row["valeur"]
+                qty = float(row["quantité"])
+                agg[asset] = agg.get(asset, 0) + qty
+    return pd.DataFrame(list(agg.items()), columns=["valeur", "quantité"])
+
+def simulation_for_aggregated(agg_pf, strategy):
+    """
+    Run simulation on aggregated portfolio.
+    Uses the same columns as the single portfolio simulation.
+    """
+    targets = json.loads(strategy["targets"])
+    targets["Cash"] = 100 - sum(targets.values())
+    stocks_df = fetch_stocks()
+    total_val = 0.0
+    portfolio_assets = {}
+    for _, row in agg_pf.iterrows():
+        asset = row["valeur"]
+        qty = float(row["quantité"])
+        price = 1.0 if asset=="Cash" else float(stocks_df[stocks_df["valeur"]==asset]["cours"].iloc[0])
+        total_val += qty * price
+        portfolio_assets[asset] = {"qty": qty, "price": price}
+    sim_rows = []
+    all_assets = set(portfolio_assets.keys()).union(set(targets.keys()))
+    for asset in all_assets:
+        current_qty = portfolio_assets[asset]["qty"] if asset in portfolio_assets else 0
+        price = portfolio_assets[asset]["price"] if asset in portfolio_assets else (1.0 if asset=="Cash" else 0.0)
+        current_value = current_qty * price
+        current_weight = (current_value / total_val * 100) if total_val > 0 else 0
+        target_pct = targets.get(asset, 0)
+        if asset=="Cash":
+            target_pct = 100 - sum(targets[k] for k in targets if k!="Cash")
+        target_value = total_val * (target_pct / 100)
+        target_qty = round(target_value / price) if price > 0 else 0
+        ecart = current_qty - target_qty
+        sim_rows.append({
+            "Valeur": asset,
+            "Cours (Prix)": price,
+            "Quantité actuelle": current_qty,
+            "Poids Actuel (%)": round(current_weight, 2),
+            "Quantité Cible": target_qty,
+            "Poids Cible (%)": target_pct,
+            "Écart": ecart
+        })
+    sim_df = pd.DataFrame(sim_rows)
+    sim_df = sim_df[["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"]]
+    st.dataframe(sim_df, use_container_width=True)
+
+
+########################################
+# PAGE: Stratégies et Simulation
+########################################
+
 def page_strategies_and_simulation():
     st.title("Stratégies et Simulation")
     tabs = st.tabs(["Gestion des Stratégies", "Assignation aux Clients", "Simulation de Stratégie"])
@@ -897,7 +1015,6 @@ def page_strategies_and_simulation():
                 df_new = pd.DataFrame(list(st.session_state.new_strategy_targets.items()), columns=["Action", "Pourcentage"])
                 total_weight = df_new["Pourcentage"].sum()
                 cash_pct = 100 - total_weight
-                df_display = df_new.copy()
                 df_display = pd.concat([df_new, pd.DataFrame([{"Action": "Cash", "Pourcentage": cash_pct}])], ignore_index=True)
                 st.table(df_display)
                 if total_weight > 100:
@@ -947,7 +1064,7 @@ def page_strategies_and_simulation():
                 total_updated = sum(updated_targets.values())
                 cash_updated = 100 - total_updated
                 display_df = pd.DataFrame(list(updated_targets.items()), columns=["Action", "Pourcentage"])
-                display_df = display_df.append({"Action": "Cash", "Pourcentage": cash_updated}, ignore_index=True)
+                display_df = pd.concat([display_df, pd.DataFrame([{"Action": "Cash", "Pourcentage": cash_updated}])], ignore_index=True)
                 st.table(display_df)
                 if st.button("Mettre à jour la stratégie"):
                     if total_updated > 100:
@@ -957,7 +1074,7 @@ def page_strategies_and_simulation():
             else:
                 st.info("Aucune stratégie à modifier.")
 
-    # Tab 1: Assignation aux Clients (remains unchanged)
+    # Tab 1: Assignation aux Clients
     with tabs[1]:
         st.header("Assignation de Stratégies aux Clients")
         clients = get_all_clients()
