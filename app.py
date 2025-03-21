@@ -1,4 +1,3 @@
-# app.py (assuming you have the same structure)
 import streamlit as st
 from pages import (
     page_manage_clients,
@@ -11,8 +10,14 @@ from pages import (
     page_strategies_and_simulation
 )
 
+def add_sidebar_logo():
+    st.sidebar.image("http://placekitten.com/200/200", width=100)
+    st.sidebar.title("My Company Name")
 
 def main():
+    # Add logo and title to sidebar
+    add_sidebar_logo()
+    
     page = st.sidebar.selectbox(
         "📂 Navigation",
         [
@@ -42,10 +47,6 @@ def main():
         page_performance_fees() 
     elif page == "Stratégies et Simulation":
         page_strategies_and_simulation()
-
-def add_sidebar_logo():
-    st.sidebar.image("http://placekitten.com/200/200", width=100)
-    st.sidebar.title("My Company Name")
 
 if __name__ == "__main__":
     main()
