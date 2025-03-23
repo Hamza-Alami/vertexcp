@@ -11,7 +11,7 @@ from pages import (
 )
 
 def add_sidebar_logo():
-    st.sidebar.image("https://www.axiom-am.com/images/logo-home.svg", width=250)
+    st.sidebar.image("https://raw.githubusercontent.com/Hamza-Alami/BenificiaAM/refs/heads/main/logo%2BAxiom.svg", width=250)
     st.sidebar.title("AXIOM Asset Management")
 
 def main():
