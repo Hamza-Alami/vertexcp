@@ -876,66 +876,92 @@ def simulation_for_aggregated(agg_pf, strategy):
 def simulation_stock_details(selected_stock, strategy, client_list):
     """
     For multiple portfolios, returns detailed breakdown for a selected stock.
-    Aggregates the selected stock from all clients and provides:
-      - A summary table with the aggregated details (price, aggregated quantity, target quantity, adjustment in quantity and value)
-      - A "Pré‑répartition" table with per‑client details (client name, current quantity, and cash available).
+    It returns two items:
+      1. An aggregated details dictionary with:
+         - "Action": the selected stock.
+         - "Prix": the stock price (rounded to 2 decimals).
+         - "Quantité actuelle agrégée": aggregated current quantity (integer).
+         - "Poids cible (%)": target percentage from the strategy.
+         - "Quantité cible agrégée": aggregated target quantity (integer).
+         - "Ajustement (à acheter si positif, à vendre si négatif)": aggregated adjustment in quantity (integer).
+         - "Valeur de l'ajustement (MAD)": adjustment value in Moroccan Dirhams (rounded to 2 decimals).
+         - "Cash disponible": total cash available across all portfolios.
+      2. A "Pré‑répartition" DataFrame with per‑client details including:
+         - "Client"
+         - "Quantité actuelle"
+         - "Quantité Cible"
+         - "Valeur de l'ajustement (MAD)"
+         - "Cash disponible"
     """
     stocks_df = fetch_stocks()
-    match = stocks_df[stocks_df["valeur"] == selected_stock]
+    # Get the price for the selected stock using its raw value (ensuring 2 decimals)
+    match = stocks_df[stocks_df["valeur"].str.lower() == selected_stock.lower()]
     if not match.empty:
         price = float(match["cours"].iloc[0])
     else:
         price = 0.0
-    aggregated_qty = 0
-    repartition_details = []
-    for client in client_list:
-        pf = get_portfolio(client)
-        if not pf.empty:
-            row = pf[pf["valeur"] == selected_stock]
-            qty = float(row["quantité"].iloc[0]) if not row.empty else 0
-        else:
-            qty = 0
-        aggregated_qty += qty
-        # Get cash for the client
-        cash_row = pf[pf["valeur"] == "Cash"] if not pf.empty else None
-        cash = float(cash_row["quantité"].iloc[0]) if (cash_row is not None and not cash_row.empty) else 0
-        repartition_details.append({
-            "Client": client,
-            "Quantité actuelle": qty,
-            "Cash disponible": cash
-        })
-    # Compute aggregated total portfolio value for these clients.
-    total_val = 0.0
-    for client in client_list:
-        pf = get_portfolio(client)
-        if not pf.empty:
-            for _, r in pf.iterrows():
-                asset = r["valeur"]
-                q = float(r["quantité"])
-                if asset.lower() == "cash":
-                    p = 1.0
-                else:
-                    m = stocks_df[stocks_df["valeur"] == asset]
-                    p = float(m["cours"].iloc[0]) if not m.empty else 0.0
-                total_val += q * p
-    # Get the target for the selected stock from the strategy.
+
+    # Get the target percentage for the selected stock from the strategy
     strategy_targets = json.loads(strategy["targets"])
     target_pct = strategy_targets.get(selected_stock, 0)
     if selected_stock.lower() == "cash":
         target_pct = 100 - sum(strategy_targets.values())
-    target_value = total_val * (target_pct / 100)
-    target_qty = round(target_value / price) if price > 0 else 0
-    adjustment = target_qty - aggregated_qty  # positive means need to buy, negative means sell
+
+    aggregated_qty = 0
+    total_cash_available = 0
+    total_value_all = 0.0
+    per_client_details = []
+
+    # Process each client to get per-client details
+    for client in client_list:
+        pf = get_portfolio(client)
+        client_value = 0.0
+        current_qty = 0
+        cash_available = 0
+        if not pf.empty:
+            for _, row in pf.iterrows():
+                asset = row["valeur"]
+                qty = float(row["quantité"])
+                # Use 1.0 as price for Cash, otherwise look it up
+                m = stocks_df[stocks_df["valeur"].str.lower() == asset.lower()]
+                p = 1.0 if asset.lower() == "cash" else (float(m["cours"].iloc[0]) if not m.empty else 0.0)
+                client_value += qty * p
+                if asset.lower() == selected_stock.lower():
+                    current_qty = qty
+                if asset.lower() == "cash":
+                    cash_available = qty
+        # Compute the client's target quantity for the selected stock
+        target_qty_client = round(client_value * (target_pct / 100) / price) if price > 0 else 0
+        adjustment_client = target_qty_client - current_qty
+        per_client_details.append({
+            "Client": client,
+            "Quantité actuelle": int(current_qty),
+            "Quantité Cible": int(target_qty_client),
+            "Valeur de l'ajustement (MAD)": round(adjustment_client * price, 2),
+            "Cash disponible": cash_available
+        })
+        aggregated_qty += current_qty
+        total_cash_available += cash_available
+        total_value_all += client_value
+
+    # Aggregated target quantity for the selected stock
+    target_qty_agg = round(total_value_all * (target_pct / 100) / price) if price > 0 else 0
+    adjustment_agg = target_qty_agg - aggregated_qty
+
     agg_details = {
         "Action": selected_stock,
-        "Prix": price,
-        "Quantité actuelle agrégée": aggregated_qty,
+        "Prix": round(price, 2),
+        "Quantité actuelle agrégée": int(aggregated_qty),
         "Poids cible (%)": target_pct,
-        "Quantité cible agrégée": target_qty,
-        "Ajustement (à acheter si positif, à vendre si négatif)": adjustment,
-        "Valeur de l'ajustement (€)": adjustment * price
+        "Quantité cible agrégée": int(target_qty_agg),
+        "Ajustement (à acheter si positif, à vendre si négatif)": int(adjustment_agg),
+        "Valeur de l'ajustement (MAD)": round(adjustment_agg * price, 2),
+        "Cash disponible": total_cash_available
     }
-    return agg_details, repartition_details
+
+    repartition_df = pd.DataFrame(per_client_details)
+    return agg_details, repartition_df
+
 
 
 ########################################
@@ -1089,16 +1115,15 @@ def page_strategies_and_simulation():
                 agg_pf = aggregate_portfolios(clients_with_strat)
                 simulation_for_aggregated(agg_pf, selected_strategy)
                 st.write("### Détail par action")
-                # The list of possible actions is the union of those in the aggregated portfolio and in the strategy targets.
-                strat_targets = json.loads(selected_strategy["targets"])
-                stock_options = list(set(agg_pf["valeur"].tolist()).union(set(strat_targets.keys())))
+                stock_options = list(set(agg_pf["valeur"].tolist()).union(set(json.loads(selected_strategy["targets"]).keys())))
                 selected_stock = st.selectbox("Sélectionner une action", stock_options, key="detail_stock")
                 if st.button("Afficher les détails"):
                     agg_details, repartition = simulation_stock_details(selected_stock, selected_strategy, clients_with_strat)
                     st.write("#### Détail agrégé")
                     st.table(pd.DataFrame([agg_details]))
                     st.write("#### Pré‑répartition")
-                    st.table(pd.DataFrame(repartition))
+                    st.table(repartition)
+
 
 # Expose the page function
 if __name__ == "__main__":
