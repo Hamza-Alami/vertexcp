@@ -11,22 +11,7 @@ from pages import (
 )
 
 def add_sidebar_logo():
-    st.sidebar.markdown(
-    """
-    <style>
-      .custom-logo {
-        border: 2px solid #000000; /* Adjust color and thickness */
-        border-radius: 8px;        /* Optional: rounded corners */
-        display: block;
-        margin-left: auto;
-        margin-right: auto;
-      }
-    </style>
-    <img class="custom-logo" src="https://www.axiom-am.com/images/logo-home.svg" width="250">
-    """,
-    unsafe_allow_html=True
-)
-
+    st.sidebar.image("https://www.axiom-am.com/images/logo-home.svg", width=250)
     st.sidebar.title("AXIOM Asset Management")
 
 def main():
