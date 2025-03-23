@@ -1070,7 +1070,7 @@ def page_strategies_and_simulation():
     # Tab 2: Simulation de Stratégie
     with tabs[2]:
         st.header("Simulation de Stratégie")
-        mode = st.radio("Mode de simulation", options=["Portefeuille Unique", "Portefeuille Multiple"], key="sim_mode")
+        mode = st.radio("Mode de simulation", options=["Portefeuille Unique", "Portefeuilles Multiples"], key="sim_mode")
         if mode == "Portefeuille Unique":
             client_sim = st.selectbox("Sélectionner un client", get_all_clients(), key="sim_client")
             if client_sim:
