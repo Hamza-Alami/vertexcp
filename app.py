@@ -1,4 +1,7 @@
 import streamlit as st
+
+st.set_page_config(layout="wide")
+
 from pages import (
     page_manage_clients,
     page_create_portfolio,
