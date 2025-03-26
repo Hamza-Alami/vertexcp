@@ -225,4 +225,3 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         st.error(f"Erreur mise à jour Cash: {e}")
         return
     st.success(f"Vendu {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, net {net_proceeds:,.2f} (commission + taxe gains).")
-
