@@ -4,9 +4,9 @@ import requests
 from db_connection import get_supabase_client
 from datetime import date, datetime
 
-##################################################
-#            Supabase Client & Helpers
-##################################################
+##############################################
+# Supabase Client & Helpers
+##############################################
 
 def get_supabase():
     return get_supabase_client()
@@ -20,9 +20,9 @@ def portfolio_table():
 def performance_table():
     return get_supabase().table("performance_periods")
 
-##################################################
-#               MASI Fetch
-##################################################
+##############################################
+# MASI Fetch
+##############################################
 
 def fetch_masi_from_cb():
     url = "https://www.casablanca-bourse.com/api/proxy/fr/api/bourse/dashboard/grouped_index_watch?"
@@ -41,9 +41,9 @@ def fetch_masi_from_cb():
         print("Error fetching MASI index:", e)
         return 0.0
 
-##################################################
-#       Fetching Stocks & Instruments
-##################################################
+##############################################
+# Fetching Stocks & Instruments
+##############################################
 
 @st.cache_data(ttl=60)
 def _cached_fetch_stocks():
@@ -55,6 +55,7 @@ def _cached_fetch_stocks():
             [(s.get("name", "N/A"), s.get("dernier_cours", 0)) for s in data],
             columns=["valeur", "cours"]
         )
+        # Add Cash row (price = 1)
         cash_row = pd.DataFrame([{"valeur": "Cash", "cours": 1}])
         return pd.concat([df, cash_row], ignore_index=True)
     except Exception as e:
@@ -68,17 +69,17 @@ def fetch_instruments():
     client = get_supabase()
     res = client.table("instruments").select("*").execute()
     if not res.data:
-        return pd.DataFrame(columns=["instrument_name","nombre_de_titres","facteur_flottant"])
+        return pd.DataFrame(columns=["instrument_name", "nombre_de_titres", "facteur_flottant"])
     df = pd.DataFrame(res.data)
-    needed_cols = ["instrument_name","nombre_de_titres","facteur_flottant"]
+    needed_cols = ["instrument_name", "nombre_de_titres", "facteur_flottant"]
     for col in needed_cols:
         if col not in df.columns:
             df[col] = None
     return df[needed_cols].copy()
 
-##################################################
-#           Client / Portfolio / Performance
-##################################################
+##############################################
+# Client / Portfolio / Performance Functions
+##############################################
 
 def get_all_clients():
     res = client_table().select("*").execute()
@@ -112,9 +113,9 @@ def get_portfolio(client_name: str) -> pd.DataFrame:
     res = portfolio_table().select("*").eq("client_id", cid).execute()
     return pd.DataFrame(res.data)
 
-##################################################
-#        CRUD for Clients & Rates
-##################################################
+##############################################
+# CRUD for Clients & Rates
+##############################################
 
 def create_client(name: str):
     if not name:
@@ -166,9 +167,9 @@ def update_client_rates(client_name: str, exchange_comm: float, is_pea: bool, cu
     except Exception as e:
         st.error(f"Erreur lors de la mise à jour des taux: {e}")
 
-##################################################
-#       Performance Periods (start_value, etc.)
-##################################################
+##############################################
+# Performance Periods Functions
+##############################################
 
 def create_performance_period(client_id: int, start_date_str: str, start_val: float, masi_start_value: float):
     if not client_id:
