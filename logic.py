@@ -28,7 +28,7 @@ def get_current_masi():
 def compute_poids_masi():
     """
     Creates a dictionary { valeur: {"capitalisation": X, "poids_masi": Y}, ... }
-    by merging instruments + stocks => capitalisation => floated_cap => sum => percentage.
+    by merging instruments and stocks data.
     """
     instruments_df = fetch_instruments()
     if instruments_df.empty:
@@ -42,7 +42,7 @@ def compute_poids_masi():
     merged["nombre_de_titres"] = merged["nombre_de_titres"].fillna(0.0).astype(float)
     merged["facteur_flottant"] = merged["facteur_flottant"].fillna(0.0).astype(float)
 
-    # Exclude zero values
+    # Exclude rows with zero values
     merged = merged[(merged["cours"] != 0.0) & (merged["nombre_de_titres"] != 0.0)].copy()
 
     merged["capitalisation"] = merged["cours"] * merged["nombre_de_titres"]
@@ -66,12 +66,11 @@ def compute_poids_masi():
 poids_masi_map = compute_poids_masi()
 
 ######################################################
-#   Create a brand-new portfolio
+#   Create a brand-new portfolio (and UI)
 ######################################################
 def create_portfolio_rows(client_name: str, holdings: dict):
     """
-    Upserts rows (valeur -> quantity) into 'portfolios' if the client has no portfolio.
-    If they do, a warning is displayed.
+    Upserts rows (valeur -> quantity) into 'portfolios' for a new portfolio.
     """
     cid = get_client_id(client_name)
     if cid is None:
@@ -93,7 +92,6 @@ def create_portfolio_rows(client_name: str, holdings: dict):
                 "cours": 0.0,
                 "valorisation": 0.0
             })
-
     if not rows:
         st.warning("Aucun actif fourni pour la création du portefeuille.")
         return
@@ -107,23 +105,18 @@ def create_portfolio_rows(client_name: str, holdings: dict):
 
 def new_portfolio_creation_ui(client_name: str):
     """
-    Lets the user pick stocks/cash to add to a new portfolio via st.session_state.
+    UI to create a new portfolio via st.session_state.
     """
     st.subheader(f"➕ Définir les actifs initiaux pour {client_name}")
-
     if "temp_holdings" not in st.session_state:
         st.session_state.temp_holdings = {}
-
     all_stocks = fetch_stocks()
     chosen_val = st.selectbox(f"Choisir une valeur ou 'Cash'", all_stocks["valeur"].tolist(), key=f"new_stock_{client_name}")
     qty = st.number_input(f"Quantité pour {client_name}", min_value=1.0, value=1.0, step=1.0, key=f"new_qty_{client_name}")
-
     if st.button(f"➕ Ajouter {chosen_val}", key=f"add_btn_{client_name}"):
         st.session_state.temp_holdings[chosen_val] = float(qty)
         st.success(f"Ajouté {qty} de {chosen_val}")
-
     if st.session_state.temp_holdings:
-        st.write("### Actifs Sélectionnés :")
         df_hold = pd.DataFrame([{"valeur": k, "quantité": v} for k, v in st.session_state.temp_holdings.items()])
         df_hold.reset_index(drop=True, inplace=True)
         st.dataframe(df_hold, use_container_width=True)
@@ -132,32 +125,27 @@ def new_portfolio_creation_ui(client_name: str):
             del st.session_state.temp_holdings
 
 ######################################################
-#        Buy / Sell
+#        Buy / Sell functions
 ######################################################
 def buy_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Informations du client introuvables.")
         return
-
     cid = get_client_id(client_name)
     if cid is None:
         st.error("Client introuvable.")
         return
-
     dfp = get_portfolio(client_name)
     exchange_rate = float(cinfo.get("exchange_commission_rate") or 0.0)
-
     raw_cost = transaction_price * quantity
     commission = raw_cost * (exchange_rate / 100.0)
     cost_with_comm = raw_cost + commission
-
     cash_match = dfp[dfp["valeur"] == "Cash"]
     current_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
     if cost_with_comm > current_cash:
         st.error(f"Montant insuffisant en Cash: {current_cash:,.2f} < {cost_with_comm:,.2f}")
         return
-
     match = dfp[dfp["valeur"] == stock_name]
     if match.empty:
         new_vwap = cost_with_comm / quantity
@@ -188,7 +176,6 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
         except Exception as e:
             st.error(f"Erreur mise à jour stock {stock_name}: {e}")
             return
-
     new_cash = current_cash - cost_with_comm
     if cash_match.empty:
         try:
@@ -212,7 +199,6 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
         except Exception as e:
             st.error(f"Erreur mise à jour Cash: {e}")
             return
-
     st.success(f"Achat de {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, coût total {cost_with_comm:,.2f} (commission incluse).")
     st.rerun()
 
@@ -221,37 +207,30 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     if not cinfo:
         st.error("Client introuvable.")
         return
-
     cid = get_client_id(client_name)
     if cid is None:
         st.error("Client introuvable.")
         return
-
     exchange_rate = float(cinfo.get("exchange_commission_rate") or 0.0)
     tax_rate = float(cinfo.get("tax_on_gains_rate") or 15.0)
-
     dfp = get_portfolio(client_name)
     match = dfp[dfp["valeur"] == stock_name]
     if match.empty:
         st.error(f"Le client ne possède pas {stock_name}.")
         return
-
     old_qty = float(match["quantité"].values[0])
     if quantity > old_qty:
         st.error(f"Quantité insuffisante: vous vendez {quantity}, mais le client possède {old_qty}.")
         return
-
     old_vwap = float(match["vwap"].values[0])
     raw_proceeds = transaction_price * quantity
     commission = raw_proceeds * (exchange_rate / 100.0)
     net_proceeds = raw_proceeds - commission
-
     cost_of_shares = old_vwap * quantity
     profit = net_proceeds - cost_of_shares
     if profit > 0:
         tax = profit * (tax_rate / 100.0)
         net_proceeds -= tax
-
     new_qty = old_qty - quantity
     try:
         if new_qty <= 0:
@@ -261,11 +240,9 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     except Exception as e:
         st.error(f"Erreur mise à jour après vente: {e}")
         return
-
     cash_match = dfp[dfp["valeur"] == "Cash"]
     old_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
     new_cash = old_cash + net_proceeds
-
     try:
         if cash_match.empty:
             portfolio_table().upsert([{
@@ -281,7 +258,6 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     except Exception as e:
         st.error(f"Erreur mise à jour Cash: {e}")
         return
-
     st.success(f"Vente de {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, net {net_proceeds:,.2f} (commission + taxe gains).")
     st.rerun()
 
@@ -291,10 +267,9 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
 def simulation_for_client_updated(client_name):
     """
     Updated simulation for a single portfolio.
-    Displays a table with the following columns:
+    Displays a table with columns:
     Valeur | Cours (Prix) | Quantité actuelle | Poids Actuel (%) | Quantité Cible | Poids Cible (%) | Écart
-    Even if an asset from the strategy is not in the portfolio, its target is computed.
-    The Cash row is always placed at the bottom.
+    (The Cash row is always placed at the bottom.)
     """
     client = get_client_info(client_name)
     if not client:
@@ -409,7 +384,7 @@ def simulation_for_aggregated(agg_pf, strategy):
 
 def simulation_stock_details(selected_stock, strategy, client_list):
     """
-    For multiple portfolios, returns detailed breakdown for a selected stock.
+    For multiple portfolios, returns a detailed breakdown for a selected stock.
     Returns:
       1. An aggregated details dictionary with:
          - "Action": the selected stock.
@@ -417,16 +392,16 @@ def simulation_stock_details(selected_stock, strategy, client_list):
          - "Quantité actuelle agrégée": aggregated current quantity (integer).
          - "Poids cible (%)": target percentage (2 decimals).
          - "Quantité cible agrégée": aggregated target quantity (integer).
-         - "Ajustement (à acheter si positif, à vendre si négatif)": aggregated adjustment in quantity (integer).
-         - "Valeur de l'ajustement (MAD)": adjustment value in MAD rounded to 2 decimals.
+         - "Ajustement (à acheter si positif, à vendre si négatif)": aggregated adjustment (integer).
+         - "Valeur de l'ajustement (MAD)": adjustment value in MAD (rounded to 2 decimals).
          - "Cash disponible": total cash available across all portfolios (rounded to 2 decimals).
       2. A "Pré‑répartition" DataFrame with per‑client details including:
          - "Client"
          - "Quantité actuelle" (integer)
          - "Quantité Cible" (integer)
          - "Ajustement" (integer)
-         - "Valeur de l'ajustement (MAD)" (2 decimals)
-         - "Cash disponible" (2 decimals)
+         - "Valeur de l'ajustement (MAD)" (rounded to 2 decimals)
+         - "Cash disponible" (rounded to 2 decimals)
          - "Capacité d'achat" (integer)
     """
     stocks_df = fetch_stocks()
@@ -464,8 +439,8 @@ def simulation_stock_details(selected_stock, strategy, client_list):
                 if asset.lower() == "cash":
                     cash_available = qty
         target_qty_client = round(client_value * (target_pct / 100) / price) if price > 0 else 0
+        # Compute adjustment (target - current) and capacity d'achat (floor of cash_available divided by effective price with commission)
         adjustment_client = target_qty_client - current_qty
-        # Calculate "Capacité d'achat": floor( cash_available / (price*(1 + commission_rate/100)) )
         capacity_achat = int(cash_available // (price * (1 + commission_rate/100))) if price > 0 else 0
         per_client_details.append({
             "Client": client,
@@ -493,8 +468,7 @@ def simulation_stock_details(selected_stock, strategy, client_list):
         "Cash disponible": round(total_cash_available, 2)
     }
     repartition_df = pd.DataFrame(per_client_details)
-    # Format "Valeur de l'ajustement (MAD)" and "Cash disponible" to show 2 decimals
+    # Format specific columns to display 2 decimals where applicable.
     repartition_df["Valeur de l'ajustement (MAD)"] = repartition_df["Valeur de l'ajustement (MAD)"].map("{:,.2f}".format)
     repartition_df["Cash disponible"] = repartition_df["Cash disponible"].map("{:,.2f}".format)
     return agg_details, repartition_df
-
