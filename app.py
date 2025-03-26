@@ -14,7 +14,7 @@ from pages import (
 )
 
 def add_sidebar_logo():
-    st.sidebar.image("Vertex.png", width=150)
+    st.sidebar.image("Vertex.png", width=100)
     st.sidebar.title("Vertex Capital Partners")
 
 def main():
