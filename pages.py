@@ -1015,56 +1015,56 @@ def page_strategies_and_simulation():
                     create_strategy(strat_name_new, st.session_state.new_strategy_targets)
                     st.session_state.new_strategy_targets = {}
                     st.success("Stratégie créée.")
-    with st.expander("Modifier/Supprimer une stratégie", expanded=False):
-        strategies_df = get_strategies()
-        if not strategies_df.empty:
-            strat_options = strategies_df["name"].tolist()
-            selected_strat_name = st.selectbox("Sélectionnez une stratégie à modifier", strat_options, key="edit_strat_select")
-            selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
-            # Initialize session state for updated targets if not already set
-            if "updated_strategy_targets" not in st.session_state or st.session_state.updated_strategy_targets.get("strategy_id") != selected_strategy["id"]:
-                st.session_state.updated_strategy_targets = {"strategy_id": selected_strategy["id"], "targets": json.loads(selected_strategy["targets"])}
-            current_targets = st.session_state.updated_strategy_targets["targets"]
-    
-            st.write("Actions actuelles dans la stratégie :")
-            # Allow editing or removal
-            for action, pct in current_targets.copy().items():
-                colA, colB = st.columns([3,1])
-                new_pct = colA.number_input(f"{action} (%)", min_value=0.0, max_value=100.0, value=float(pct), step=0.5, key=f"edit_{action}")
-                remove = colB.checkbox("Supprimer", key=f"remove_{action}")
-                if remove:
-                    current_targets.pop(action)
-                else:
-                    current_targets[action] = new_pct
-    
-            st.write("Ajouter une nouvelle action :")
-            colD, colE = st.columns(2)
-            add_action = colD.selectbox("Nouvelle action", stock_options, key="add_strat_stock")
-            add_pct = colE.number_input("Pourcentage", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="add_strat_pct")
-            if st.button("Ajouter l'action"):
-                if add_action in current_targets:
-                    st.error("Action déjà présente.")
-                else:
-                    current_targets[add_action] = add_pct
-                    st.success(f"{add_action} ajouté avec {add_pct}%")
-    
-            total_updated = sum(current_targets.values())
-            cash_updated = 100 - total_updated
-            display_df = pd.DataFrame(list(current_targets.items()), columns=["Action", "Pourcentage"])
-            display_df = pd.concat([display_df, pd.DataFrame([{"Action": "Cash", "Pourcentage": cash_updated}])], ignore_index=True)
-            st.table(display_df)
-            if st.button("Mettre à jour la stratégie"):
-                if total_updated > 100:
-                    st.error(f"Le total dépasse 100% de {total_updated - 100}%.")
-                else:
-                    update_strategy(selected_strategy["id"], selected_strat_name, current_targets)
-                    st.success("Stratégie mise à jour.")
-                    # Clear the session state for updated targets so next modification starts fresh.
-                    st.session_state.pop("updated_strategy_targets")
-            if st.button("Supprimer la stratégie"):
-                delete_strategy(selected_strategy["id"])
-        else:
-            st.info("Aucune stratégie à modifier.")
+        with st.expander("Modifier/Supprimer une stratégie", expanded=False):
+            strategies_df = get_strategies()
+            if not strategies_df.empty:
+                strat_options = strategies_df["name"].tolist()
+                selected_strat_name = st.selectbox("Sélectionnez une stratégie à modifier", strat_options, key="edit_strat_select")
+                selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
+                # Initialize session state for updated targets if not already set
+                if "updated_strategy_targets" not in st.session_state or st.session_state.updated_strategy_targets.get("strategy_id") != selected_strategy["id"]:
+                    st.session_state.updated_strategy_targets = {"strategy_id": selected_strategy["id"], "targets": json.loads(selected_strategy["targets"])}
+                current_targets = st.session_state.updated_strategy_targets["targets"]
+        
+                st.write("Actions actuelles dans la stratégie :")
+                # Allow editing or removal
+                for action, pct in current_targets.copy().items():
+                    colA, colB = st.columns([3,1])
+                    new_pct = colA.number_input(f"{action} (%)", min_value=0.0, max_value=100.0, value=float(pct), step=0.5, key=f"edit_{action}")
+                    remove = colB.checkbox("Supprimer", key=f"remove_{action}")
+                    if remove:
+                        current_targets.pop(action)
+                    else:
+                        current_targets[action] = new_pct
+        
+                st.write("Ajouter une nouvelle action :")
+                colD, colE = st.columns(2)
+                add_action = colD.selectbox("Nouvelle action", stock_options, key="add_strat_stock")
+                add_pct = colE.number_input("Pourcentage", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="add_strat_pct")
+                if st.button("Ajouter l'action"):
+                    if add_action in current_targets:
+                        st.error("Action déjà présente.")
+                    else:
+                        current_targets[add_action] = add_pct
+                        st.success(f"{add_action} ajouté avec {add_pct}%")
+        
+                total_updated = sum(current_targets.values())
+                cash_updated = 100 - total_updated
+                display_df = pd.DataFrame(list(current_targets.items()), columns=["Action", "Pourcentage"])
+                display_df = pd.concat([display_df, pd.DataFrame([{"Action": "Cash", "Pourcentage": cash_updated}])], ignore_index=True)
+                st.table(display_df)
+                if st.button("Mettre à jour la stratégie"):
+                    if total_updated > 100:
+                        st.error(f"Le total dépasse 100% de {total_updated - 100}%.")
+                    else:
+                        update_strategy(selected_strategy["id"], selected_strat_name, current_targets)
+                        st.success("Stratégie mise à jour.")
+                        # Clear the session state for updated targets so next modification starts fresh.
+                        st.session_state.pop("updated_strategy_targets")
+                if st.button("Supprimer la stratégie"):
+                    delete_strategy(selected_strategy["id"])
+            else:
+                st.info("Aucune stratégie à modifier.")
 
 
     # Tab 1: Assignation aux Clients
