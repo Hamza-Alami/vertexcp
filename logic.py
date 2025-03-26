@@ -1,5 +1,3 @@
-# logic.py
-
 import streamlit as st
 import pandas as pd
 
@@ -22,7 +20,6 @@ from db_utils import (
 ######################################################
 
 def get_current_masi():
-    """Return the real-time MASI index from Casablanca Bourse."""
     return db_utils.fetch_masi_from_cb()
 
 ######################################################
@@ -30,33 +27,23 @@ def get_current_masi():
 ######################################################
 
 def compute_poids_masi():
-    """
-    Creates a dictionary { valeur: {"capitalisation": X, "poids_masi": Y}, ... }
-    by merging instruments + stocks => capitalisation => floated_cap => sum => percentage.
-    """
     instruments_df = fetch_instruments()
     if instruments_df.empty:
         return {}
-
     stocks_df = fetch_stocks()
     instr_renamed = instruments_df.rename(columns={"instrument_name": "valeur"})
     merged = pd.merge(instr_renamed, stocks_df, on="valeur", how="left")
-
     merged["cours"] = merged["cours"].fillna(0.0).astype(float)
     merged["nombre_de_titres"] = merged["nombre_de_titres"].fillna(0.0).astype(float)
     merged["facteur_flottant"] = merged["facteur_flottant"].fillna(0.0).astype(float)
-
-    # exclude zero
     merged = merged[(merged["cours"] != 0.0) & (merged["nombre_de_titres"] != 0.0)].copy()
-
     merged["capitalisation"] = merged["cours"] * merged["nombre_de_titres"]
-    merged["floated_cap"]    = merged["capitalisation"] * merged["facteur_flottant"]
+    merged["floated_cap"] = merged["capitalisation"] * merged["facteur_flottant"]
     tot_floated = merged["floated_cap"].sum()
     if tot_floated <= 0:
         merged["poids_masi"] = 0.0
     else:
         merged["poids_masi"] = (merged["floated_cap"] / tot_floated) * 100.0
-
     outdict = {}
     for _, row in merged.iterrows():
         val = row["valeur"]
@@ -66,7 +53,6 @@ def compute_poids_masi():
         }
     return outdict
 
-# Global dictionary for Poids Masi
 poids_masi_map = compute_poids_masi()
 
 ######################################################
@@ -74,19 +60,13 @@ poids_masi_map = compute_poids_masi()
 ######################################################
 
 def create_portfolio_rows(client_name: str, holdings: dict):
-    """
-    Upserts rows (valeur -> quantity) into 'portfolios' if the client has no portfolio.
-    If they do, we do a warning.
-    """
     cid = get_client_id(client_name)
     if cid is None:
         st.error("Client not found.")
         return
-
     if client_has_portfolio(client_name):
         st.warning(f"Le client '{client_name}' possède déjà un portefeuille.")
         return
-
     rows = []
     for stock, qty in holdings.items():
         if qty > 0:
@@ -98,51 +78,35 @@ def create_portfolio_rows(client_name: str, holdings: dict):
                 "cours": 0.0,
                 "valorisation": 0.0
             })
-
     if not rows:
         st.warning("Aucun actif fourni pour la création du portefeuille.")
         return
-
     try:
         portfolio_table().upsert(rows, on_conflict="client_id,valeur").execute()
         st.success(f"Portefeuille créé pour '{client_name}'!")
-        st.rerun()
     except Exception as e:
         st.error(f"Erreur création du portefeuille: {e}")
 
 def new_portfolio_creation_ui(client_name: str):
-    """
-    Lets the user pick stocks/cash to add to a brand-new portfolio via st.session_state.
-    """
     st.subheader(f"➕ Définir les actifs initiaux pour {client_name}")
-
     if "temp_holdings" not in st.session_state:
         st.session_state.temp_holdings = {}
-
     all_stocks = fetch_stocks()
     chosen_val = st.selectbox(f"Choisir une valeur ou 'Cash'", all_stocks["valeur"].tolist(), key=f"new_stock_{client_name}")
-    qty = st.number_input(
-        f"Quantité pour {client_name}",
-        min_value=1.0,
-        value=1.0,
-        step=1.0,
-        key=f"new_qty_{client_name}"
-    )
-
+    qty = st.number_input(f"Quantité pour {client_name}", min_value=1.0, value=1.0, step=1.0, key=f"new_qty_{client_name}")
     if st.button(f"➕ Ajouter {chosen_val}", key=f"add_btn_{client_name}"):
         st.session_state.temp_holdings[chosen_val] = float(qty)
         st.success(f"Ajouté {qty} de {chosen_val}")
-
     if st.session_state.temp_holdings:
         st.write("### Actifs Sélectionnés :")
-        df_hold = pd.DataFrame([
-            {"valeur": k, "quantité": v} for k, v in st.session_state.temp_holdings.items()
-        ])
-        st.dataframe(df_hold, use_container_width=True)
-
+        df_hold = pd.DataFrame([{"valeur": k, "quantité": v} for k, v in st.session_state.temp_holdings.items()])
+        st.table(df_hold.reset_index(drop=True))
         if st.button(f"💾 Créer le Portefeuille pour {client_name}", key=f"create_pf_btn_{client_name}"):
             create_portfolio_rows(client_name, st.session_state.temp_holdings)
             del st.session_state.temp_holdings
+
+# (buy_shares and sell_shares remain unchanged)
+
 
 ######################################################
 #        Buy / Sell
