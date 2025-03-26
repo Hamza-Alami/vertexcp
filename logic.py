@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-
 import db_utils
 from db_utils import (
     get_portfolio,
@@ -15,16 +14,8 @@ from db_utils import (
     get_latest_performance_period_for_all_clients,
 )
 
-######################################################
-#     Real-time MASI Fetch
-######################################################
-
 def get_current_masi():
     return db_utils.fetch_masi_from_cb()
-
-######################################################
-#  Compute Poids Masi for each "valeur"
-######################################################
 
 def compute_poids_masi():
     instruments_df = fetch_instruments()
@@ -54,10 +45,6 @@ def compute_poids_masi():
     return outdict
 
 poids_masi_map = compute_poids_masi()
-
-######################################################
-#   Create a brand-new portfolio
-######################################################
 
 def create_portfolio_rows(client_name: str, holdings: dict):
     cid = get_client_id(client_name)
@@ -103,44 +90,28 @@ def new_portfolio_creation_ui(client_name: str):
         st.table(df_hold.reset_index(drop=True))
         if st.button(f"💾 Créer le Portefeuille pour {client_name}", key=f"create_pf_btn_{client_name}"):
             create_portfolio_rows(client_name, st.session_state.temp_holdings)
-            del st.session_state.temp_holdings
-
-# (buy_shares and sell_shares remain unchanged)
-
-
-######################################################
-#        Buy / Sell
-######################################################
 
 def buy_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Informations du client introuvables.")
         return
-
     cid = get_client_id(client_name)
     if cid is None:
         st.error("Client introuvable.")
         return
-
     dfp = get_portfolio(client_name)
     exchange_rate = float(cinfo.get("exchange_commission_rate") or 0.0)
-
     raw_cost = transaction_price * quantity
     commission = raw_cost * (exchange_rate / 100.0)
     cost_with_comm = raw_cost + commission
-
-    # Check Cash
     cash_match = dfp[dfp["valeur"] == "Cash"]
     current_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
     if cost_with_comm > current_cash:
         st.error(f"Montant insuffisant en Cash: {current_cash:,.2f} < {cost_with_comm:,.2f}")
         return
-
-    # Check if stock exists
     match = dfp[dfp["valeur"] == stock_name]
     if match.empty:
-        # Insert new
         new_vwap = cost_with_comm / quantity
         try:
             portfolio_table().upsert([{
@@ -155,7 +126,6 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
             st.error(f"Erreur lors de l'ajout de {stock_name}: {e}")
             return
     else:
-        # update
         old_qty = float(match["quantité"].values[0])
         old_vwap = float(match["vwap"].values[0])
         old_cost = old_qty * old_vwap
@@ -170,8 +140,6 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
         except Exception as e:
             st.error(f"Erreur mise à jour stock {stock_name}: {e}")
             return
-
-    # Update Cash
     new_cash = current_cash - cost_with_comm
     if cash_match.empty:
         try:
@@ -195,49 +163,37 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
         except Exception as e:
             st.error(f"Erreur mise à jour Cash: {e}")
             return
-
-    st.success(
-        f"Achat de {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
-        f"coût total {cost_with_comm:,.2f} (commission incluse)."
-    )
-    st.rerun()
+    st.success(f"Achat de {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, coût total {cost_with_comm:,.2f} (commission incluse).")
 
 def sell_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Client introuvable.")
         return
-
     cid = get_client_id(client_name)
     if cid is None:
         st.error("Client introuvable.")
         return
-
     exchange_rate = float(cinfo.get("exchange_commission_rate") or 0.0)
-    tax_rate      = float(cinfo.get("tax_on_gains_rate") or 15.0)
-
+    tax_rate = float(cinfo.get("tax_on_gains_rate") or 15.0)
     dfp = get_portfolio(client_name)
     match = dfp[dfp["valeur"] == stock_name]
     if match.empty:
         st.error(f"Le client ne possède pas {stock_name}.")
         return
-
     old_qty = float(match["quantité"].values[0])
     if quantity > old_qty:
         st.error(f"Quantité insuffisante: vend {quantity}, possède {old_qty}.")
         return
-
-    old_vwap      = float(match["vwap"].values[0])
-    raw_proceeds  = transaction_price * quantity
-    commission    = raw_proceeds * (exchange_rate / 100.0)
-    net_proceeds  = raw_proceeds - commission
-
+    old_vwap = float(match["vwap"].values[0])
+    raw_proceeds = transaction_price * quantity
+    commission = raw_proceeds * (exchange_rate / 100.0)
+    net_proceeds = raw_proceeds - commission
     cost_of_shares = old_vwap * quantity
     profit = net_proceeds - cost_of_shares
     if profit > 0:
         tax = profit * (tax_rate / 100.0)
         net_proceeds -= tax
-
     new_qty = old_qty - quantity
     try:
         if new_qty <= 0:
@@ -247,12 +203,9 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     except Exception as e:
         st.error(f"Erreur mise à jour après vente: {e}")
         return
-
-    # Update Cash
     cash_match = dfp[dfp["valeur"] == "Cash"]
     old_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
     new_cash = old_cash + net_proceeds
-
     try:
         if cash_match.empty:
             portfolio_table().upsert([{
@@ -271,9 +224,5 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     except Exception as e:
         st.error(f"Erreur mise à jour Cash: {e}")
         return
+    st.success(f"Vendu {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, net {net_proceeds:,.2f} (commission + taxe gains).")
 
-    st.success(
-        f"Vendu {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
-        f"net {net_proceeds:,.2f} (commission + taxe gains)."
-    )
-    st.rerun()
