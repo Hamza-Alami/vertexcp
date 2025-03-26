@@ -18,7 +18,6 @@ def add_sidebar_logo():
     st.sidebar.title("Vertex Capital Partners")
 
 def main():
-    # Add logo and title to sidebar
     add_sidebar_logo()
     
     page = st.sidebar.selectbox(
@@ -47,7 +46,7 @@ def main():
     elif page == "Marché":
         page_market()
     elif page == "Performance & Fees":
-        page_performance_fees() 
+        page_performance_fees()
     elif page == "Stratégies et Simulation":
         page_strategies_and_simulation()
 
