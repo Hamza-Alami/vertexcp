@@ -1,6 +1,6 @@
 import streamlit as st
 
-st.set_page_config(page_title="Vertex Asset Management", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(layout="wide")
 
 from pages import (
     page_manage_clients,
@@ -14,12 +14,13 @@ from pages import (
 )
 
 def add_sidebar_logo():
-    # Use a logo hosted on your server or GitHub (ensure it’s publicly accessible)
-    st.sidebar.image("Vertex.png", width=250)
+    st.sidebar.image("Vertex.png", width=100)
     st.sidebar.title("Vertex Capital Partners")
 
 def main():
+    # Add logo and title to sidebar
     add_sidebar_logo()
+    
     page = st.sidebar.selectbox(
         "📂 Navigation",
         [
@@ -46,7 +47,7 @@ def main():
     elif page == "Marché":
         page_market()
     elif page == "Performance & Fees":
-        page_performance_fees()
+        page_performance_fees() 
     elif page == "Stratégies et Simulation":
         page_strategies_and_simulation()
 
