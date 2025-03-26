@@ -9,19 +9,15 @@ from datetime import date, datetime
 ##################################################
 
 def get_supabase():
-    """Return the Supabase client from a global connection."""
     return get_supabase_client()
 
 def client_table():
-    """Shortcut to the 'clients' table."""
     return get_supabase().table("clients")
 
 def portfolio_table():
-    """Shortcut to the 'portfolios' table."""
     return get_supabase().table("portfolios")
 
 def performance_table():
-    """Shortcut to the 'performance_periods' table."""
     return get_supabase().table("performance_periods")
 
 ##################################################
