@@ -225,3 +225,167 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         st.error(f"Erreur mise à jour Cash: {e}")
         return
     st.success(f"Vendu {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, net {net_proceeds:,.2f} (commission + taxe gains).")
+
+def simulation_for_client_updated(client_name):
+    client = get_client_info(client_name)
+    if not client:
+        st.error("Client non trouvé.")
+        return
+    strategies_df = get_strategies()
+    if "strategy_id" in client and client["strategy_id"]:
+        strat = strategies_df[strategies_df["id"] == client["strategy_id"]]
+        targets = json.loads(strat.iloc[0]["targets"]) if not strat.empty else {}
+    else:
+        targets = {}
+    pf = get_portfolio(client_name)
+    if pf.empty:
+        st.error("Portefeuille vide pour ce client.")
+        return
+    stocks_df = fetch_stocks()
+    total_val = 0.0
+    portfolio_assets = {}
+    for _, row in pf.iterrows():
+        asset = row["valeur"]
+        qty = float(row["quantité"])
+        match = stocks_df[stocks_df["valeur"] == asset]
+        price = float(match["cours"].iloc[0]) if not match.empty else 0.0
+        total_val += qty * price
+        portfolio_assets[asset] = {"qty": qty, "price": price}
+    for asset in targets.keys():
+        if asset not in portfolio_assets:
+            match = stocks_df[stocks_df["valeur"] == asset]
+            price = float(match["cours"].iloc[0]) if not match.empty else 0.0
+            portfolio_assets[asset] = {"qty": 0, "price": price}
+    sim_rows = []
+    assets_ordered = [a for a in portfolio_assets if a.lower() != "cash"] + (["Cash"] if "Cash" in portfolio_assets else [])
+    for asset in assets_ordered:
+        current_qty = portfolio_assets[asset]["qty"]
+        price = portfolio_assets[asset]["price"]
+        current_value = current_qty * price
+        current_weight = (current_value / total_val * 100) if total_val > 0 else 0
+        target_pct = targets.get(asset, 0)
+        if asset.lower() == "cash":
+            target_pct = 100 - sum(targets.values())
+        target_value = total_val * (target_pct / 100)
+        target_qty = round(target_value / price) if price > 0 else 0
+        ecart = current_qty - target_qty
+        sim_rows.append({
+            "Valeur": asset,
+            "Cours (Prix)": price,
+            "Quantité actuelle": current_qty,
+            "Poids Actuel (%)": round(current_weight, 2),
+            "Quantité Cible": target_qty,
+            "Poids Cible (%)": target_pct,
+            "Écart": ecart
+        })
+    sim_df = pd.DataFrame(sim_rows, columns=["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"])
+    st.dataframe(sim_df.style.hide(axis="index"), use_container_width=True)
+
+def aggregate_portfolios(client_list):
+    agg = {}
+    for client in client_list:
+        pf = get_portfolio(client)
+        if not pf.empty:
+            for _, row in pf.iterrows():
+                asset = row["valeur"]
+                qty = float(row["quantité"])
+                agg[asset] = agg.get(asset, 0) + qty
+    return pd.DataFrame(list(agg.items()), columns=["valeur", "quantité"])
+
+def simulation_for_aggregated(agg_pf, strategy):
+    targets = json.loads(strategy["targets"])
+    targets["Cash"] = 100 - sum(targets.values())
+    stocks_df = fetch_stocks()
+    total_val = 0.0
+    portfolio_assets = {}
+    for _, row in agg_pf.iterrows():
+        asset = row["valeur"]
+        qty = float(row["quantité"])
+        match = stocks_df[stocks_df["valeur"] == asset]
+        price = 1.0 if asset.lower() == "cash" else (float(match["cours"].iloc[0]) if not match.empty else 0.0)
+        total_val += qty * price
+        portfolio_assets[asset] = {"qty": qty, "price": price}
+    assets_ordered = [a for a in portfolio_assets if a.lower() != "cash"] + (["Cash"] if "Cash" in portfolio_assets else [])
+    sim_rows = []
+    for asset in assets_ordered:
+        current_qty = portfolio_assets[asset]["qty"]
+        price = portfolio_assets[asset]["price"]
+        current_value = current_qty * price
+        current_weight = (current_value / total_val * 100) if total_val > 0 else 0
+        target_pct = targets.get(asset, 0)
+        if asset.lower() == "cash":
+            target_pct = 100 - sum(targets[k] for k in targets if k.lower() != "cash")
+        target_value = total_val * (target_pct / 100)
+        target_qty = round(target_value / price) if price > 0 else 0
+        ecart = current_qty - target_qty
+        sim_rows.append({
+            "Valeur": asset,
+            "Cours (Prix)": price,
+            "Quantité actuelle": current_qty,
+            "Poids Actuel (%)": round(current_weight, 2),
+            "Quantité Cible": target_qty,
+            "Poids Cible (%)": target_pct,
+            "Écart": ecart
+        })
+    sim_df = pd.DataFrame(sim_rows, columns=["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"])
+    st.dataframe(sim_df.style.hide(axis="index"), use_container_width=True)
+
+def simulation_stock_details(selected_stock, strategy, client_list):
+    stocks_df = fetch_stocks()
+    match = stocks_df[stocks_df["valeur"].str.lower() == selected_stock.lower()]
+    if not match.empty:
+        price = round(float(match["cours"].iloc[0]), 2)
+    else:
+        price = 0.0
+    strategy_targets = json.loads(strategy["targets"])
+    target_pct = strategy_targets.get(selected_stock, 0)
+    if selected_stock.lower() == "cash":
+        target_pct = 100 - sum(strategy_targets.values())
+    aggregated_qty = 0
+    total_cash_available = 0
+    total_value_all = 0.0
+    per_client_details = []
+    for client in client_list:
+        pf = get_portfolio(client)
+        client_value = 0.0
+        current_qty = 0
+        cash_available = 0
+        if not pf.empty:
+            for _, row in pf.iterrows():
+                asset = row["valeur"]
+                qty = float(row["quantité"])
+                m = stocks_df[stocks_df["valeur"].str.lower() == asset.lower()]
+                p = 1.0 if asset.lower() == "cash" else (float(m["cours"].iloc[0]) if not m.empty else 0.0)
+                client_value += qty * p
+                if asset.lower() == selected_stock.lower():
+                    current_qty = qty
+                if asset.lower() == "cash":
+                    cash_available = qty
+        target_qty_client = round(client_value * (target_pct / 100) / price) if price > 0 else 0
+        adjustment_client = target_qty_client - current_qty
+        per_client_details.append({
+            "Client": client,
+            "Quantité actuelle": int(current_qty),
+            "Quantité Cible": int(target_qty_client),
+            "Valeur de l'ajustement (MAD)": round(adjustment_client * price, 2),
+            "Cash disponible": round(cash_available, 2)
+        })
+        aggregated_qty += current_qty
+        total_cash_available += cash_available
+        total_value_all += client_value
+    target_qty_agg = round(total_value_all * (target_pct / 100) / price) if price > 0 else 0
+    adjustment_agg = target_qty_agg - aggregated_qty
+    agg_details = {
+        "Action": selected_stock,
+        "Prix": round(price, 2),
+        "Quantité actuelle agrégée": int(aggregated_qty),
+        "Poids cible (%)": round(target_pct, 2),
+        "Quantité cible agrégée": int(target_qty_agg),
+        "Ajustement (à acheter si positif, à vendre si négatif)": int(adjustment_agg),
+        "Valeur de l'ajustement (MAD)": round(adjustment_agg * price, 2),
+        "Cash disponible": round(total_cash_available, 2)
+    }
+    repartition_df = pd.DataFrame(per_client_details)
+    repartition_df["Valeur de l'ajustement (MAD)"] = repartition_df["Valeur de l'ajustement (MAD)"].apply(lambda x: f"{x:,.2f}")
+    repartition_df["Cash disponible"] = repartition_df["Cash disponible"].apply(lambda x: f"{x:,.2f}")
+    return agg_details, repartition_df
