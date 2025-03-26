@@ -114,8 +114,7 @@ def show_portfolio(client_name, read_only=False):
             if c in df.columns:
                 df.drop(columns=c, inplace=True)
         columns_display = ["valeur", "quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids", "poids_masi"]
-        df_disp = df[columns_display].reset_index(drop=True)
-        st.table(df_disp)
+        st.table(df[columns_display].reset_index(drop=True))
         return
     cinfo = get_client_info(client_name)
     if cinfo:
@@ -146,8 +145,8 @@ def show_portfolio(client_name, read_only=False):
             cid2 = get_client_id(client_name)
             for idx, row2 in updated_df.iterrows():
                 valn = str(row2["valeur"])
-                qn   = int(row2["quantité"])
-                vw   = float(row2["vwap"])
+                qn = int(row2["quantité"])
+                vw = float(row2["vwap"])
                 try:
                     portfolio_table().update({"quantité": qn, "vwap": vw}).eq("client_id", cid2).eq("valeur", valn).execute()
                 except Exception as e:
@@ -244,8 +243,7 @@ def page_inventory():
             row["poids"] = 0.0
     df_inv = pd.DataFrame(rows)
     fmt_dict = {"quantité total": "{:,.0f}", "valorisation": "{:,.2f}", "poids": "{:,.2f}"}
-    styled_inv = df_inv.style.format(fmt_dict).hide_index()
-    st.dataframe(styled_inv, use_container_width=True)
+    st.dataframe(df_inv.style.hide_index().format(fmt_dict), use_container_width=True)
     st.write(f"### Actif sous gestion: {overall_val:,.2f}")
 
 ########################################
@@ -270,8 +268,7 @@ def page_market():
     df_mkt = pd.merge(df_mkt, stx, on="valeur", how="left")
     df_mkt.rename(columns={"cours": "Cours"}, inplace=True)
     df_mkt = df_mkt[["valeur", "Cours", "Capitalisation", "Poids Masi"]]
-    styled_mkt = df_mkt.style.format({"Cours": "{:,.2f}", "Capitalisation": "{:,.2f}", "Poids Masi": "{:,.2f}"}).hide_index()
-    st.dataframe(styled_mkt, use_container_width=True)
+    st.dataframe(df_mkt.style.hide_index().format({"Cours": "{:,.2f}", "Capitalisation": "{:,.2f}", "Poids Masi": "{:,.2f}"}), use_container_width=True)
 
 ########################################
 # 8) Performance & Fees
@@ -347,9 +344,9 @@ def page_performance_fees():
             df_periods2 = df_periods2.sort_values("start_date", ascending=False)
             start_choices = df_periods2["start_date"].unique().tolist()
             pick = st.selectbox("Choisir la date de début", start_choices)
-            row_chosen = df_periods2[df_periods2["start_date"]==pick].iloc[0]
-            portfolio_start = float(row_chosen.get("start_value",0))
-            masi_start = float(row_chosen.get("masi_start_value",0))
+            row_chosen = df_periods2[df_periods2["start_date"] == pick].iloc[0]
+            portfolio_start = float(row_chosen.get("start_value", 0))
+            masi_start = float(row_chosen.get("masi_start_value", 0))
             pdf = get_portfolio(client_name)
             if pdf.empty:
                 st.warning("Pas de portefeuille pour ce client.")
@@ -370,7 +367,7 @@ def page_performance_fees():
                 surp_pct = perf_port - perf_masi
                 surp_abs = (surp_pct / 100.0) * portfolio_start
                 cinfo_ = get_client_info(client_name)
-                mgmt_rate = float(cinfo_.get("management_fee_rate",0)) / 100.0
+                mgmt_rate = float(cinfo_.get("management_fee_rate", 0)) / 100.0
                 if cinfo_.get("bill_surperformance", False):
                     base_ = max(0, surp_abs)
                     fees_ = base_ * mgmt_rate
@@ -390,9 +387,8 @@ def page_performance_fees():
                     "Surperf Abs.": surp_abs,
                     "Frais": fees_,
                 }])
-                numcols = results_df.select_dtypes(include=["int","float"]).columns
-                rstyled = results_df.style.hide_index().format("{:,.2f}", subset=numcols)
-                st.dataframe(rstyled, use_container_width=True)
+                numcols = results_df.select_dtypes(include=["int", "float"]).columns
+                st.dataframe(results_df.style.hide_index().format("{:,.2f}", subset=numcols), use_container_width=True)
     with st.expander("Résumé de Performance (tous les clients)", expanded=False):
         all_latest = get_latest_performance_period_for_all_clients()
         if all_latest.empty:
@@ -404,9 +400,9 @@ def page_performance_fees():
             all_cs = get_all_clients()
             for _, rowL in all_latest.iterrows():
                 c_id = rowL["client_id"]
-                st_val = float(rowL.get("start_value",0))
-                ms_val = float(rowL.get("masi_start_value",0))
-                ddate = str(rowL.get("start_date",""))
+                st_val = float(rowL.get("start_value", 0))
+                ms_val = float(rowL.get("masi_start_value", 0))
+                ddate = str(rowL.get("start_date", ""))
                 name_ = None
                 for cc_ in all_cs:
                     if get_client_id(cc_) == c_id:
@@ -420,7 +416,7 @@ def page_performance_fees():
                     for _, prow2 in pdf2.iterrows():
                         v2 = str(prow2["valeur"])
                         q2 = float(prow2["quantité"])
-                        mt2 = stx2[stx2["valeur"]== v2]
+                        mt2 = stx2[stx2["valeur"] == v2]
                         px2 = float(mt2["cours"].values[0]) if not mt2.empty else 0.0
                         cur_val2 += (q2 * px2)
                 gains_port2 = cur_val2 - st_val
@@ -430,8 +426,8 @@ def page_performance_fees():
                 surp_pct2 = perf_port2 - perf_masi2
                 surp_abs2 = (surp_pct2 / 100.0) * st_val
                 cinfo2 = get_client_info(name_)
-                mgmtr2 = float(cinfo2.get("management_fee_rate",0)) / 100.0
-                if cinfo2.get("bill_surperformance",False):
+                mgmtr2 = float(cinfo2.get("management_fee_rate", 0)) / 100.0
+                if cinfo2.get("bill_surperformance", False):
                     base2 = max(0, surp_abs2)
                     fee2 = base2 * mgmtr2
                 else:
@@ -454,7 +450,7 @@ def page_performance_fees():
                 st.info("Aucune info dispo.")
             else:
                 df_sum = pd.DataFrame(all_list)
-                numeric_cols = df_sum.select_dtypes(include=["int","float"]).columns
+                numeric_cols = df_sum.select_dtypes(include=["int", "float"]).columns
                 st.dataframe(df_sum.style.hide_index().format("{:,.2f}", subset=numeric_cols), use_container_width=True)
                 tot_start = df_sum["Portf Départ"].sum()
                 tot_cur = df_sum["Portf Actuel"].sum()
@@ -633,6 +629,7 @@ def simulation_stock_details(selected_stock, strategy, client_list):
     repartition_df["Valeur de l'ajustement (MAD)"] = repartition_df["Valeur de l'ajustement (MAD)"].apply(lambda x: f"{x:,.2f}")
     repartition_df["Cash disponible"] = repartition_df["Cash disponible"].apply(lambda x: f"{x:,.2f}")
     return agg_details, repartition_df
+
 ########################################
 # PAGE : STRATÉGIES ET SIMULATION
 ########################################
