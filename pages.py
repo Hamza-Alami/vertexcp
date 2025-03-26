@@ -30,7 +30,7 @@ from logic import (
 )
 
 ########################################
-# 1) Manage Clients Page
+# 1) Gestion des Clients
 ########################################
 def page_manage_clients():
     st.title("Gestion des Clients")
@@ -51,7 +51,7 @@ def page_manage_clients():
                 delete_client(delete_choice)
 
 ########################################
-# 2) Create Portfolio Page
+# 2) Création d'un Portefeuille
 ########################################
 def page_create_portfolio():
     st.title("Création d'un Portefeuille Client")
@@ -67,7 +67,7 @@ def page_create_portfolio():
                 new_portfolio_creation_ui(cselect)
 
 ########################################
-# 3) Afficher / Gérer un portefeuille
+# 3) Affichage / Gestion d'un Portefeuille
 ########################################
 def show_portfolio(client_name, read_only=False):
     cid = get_client_id(client_name)
@@ -88,7 +88,7 @@ def show_portfolio(client_name, read_only=False):
         live_price = float(match["cours"].values[0]) if not match.empty else 0.0
         df.at[i, "cours"] = live_price
         qty_ = float(row.get("quantité", 0))
-        vw_  = float(row.get("vwap", 0.0))
+        vw_ = float(row.get("vwap", 0.0))
         val_ = round(qty_ * live_price, 2)
         df.at[i, "valorisation"] = val_
         cost_ = round(qty_ * vw_, 2)
@@ -100,10 +100,7 @@ def show_portfolio(client_name, read_only=False):
             info = poids_masi_map.get(val, {"poids_masi": 0.0})
             df.at[i, "poids_masi"] = info["poids_masi"]
     total_val = df["valorisation"].sum()
-    if total_val > 0:
-        df["poids"] = ((df["valorisation"] / total_val) * 100).round(2)
-    else:
-        df["poids"] = 0.0
+    df["poids"] = (df["valorisation"] / total_val * 100).round(2) if total_val > 0 else 0.0
     df["__cash_marker"] = df["valeur"].apply(lambda x: 1 if x == "Cash" else 0)
     df.sort_values("__cash_marker", inplace=True, ignore_index=True)
     st.subheader(f"Portefeuille de {client_name}")
@@ -120,21 +117,21 @@ def show_portfolio(client_name, read_only=False):
     if cinfo:
         with st.expander(f"Modifier Commissions / Taxes / Frais pour {client_name}", expanded=False):
             exch = float(cinfo.get("exchange_commission_rate") or 0.0)
-            mgf  = float(cinfo.get("management_fee_rate") or 0.0)
-            pea  = bool(cinfo.get("is_pea") or False)
-            tax  = float(cinfo.get("tax_on_gains_rate") or 15.0)
+            mgf = float(cinfo.get("management_fee_rate") or 0.0)
+            pea = bool(cinfo.get("is_pea") or False)
+            tax = float(cinfo.get("tax_on_gains_rate") or 15.0)
             bill_surf = bool(cinfo.get("bill_surperformance", False))
             new_exch = st.number_input("Commission d'intermédiation (%)", min_value=0.0, value=exch, step=0.01)
             new_mgmt = st.number_input("Frais de gestion (%)", min_value=0.0, value=mgf, step=0.01)
-            new_pea  = st.checkbox("Compte PEA ?", value=pea)
-            new_tax  = st.number_input("Taux d'imposition sur les gains (%)", min_value=0.0, value=tax, step=0.01)
+            new_pea = st.checkbox("Compte PEA ?", value=pea)
+            new_tax = st.number_input("Taux d'imposition sur les gains (%)", min_value=0.0, value=tax, step=0.01)
             new_bill = st.checkbox("Facturer Surperformance ?", value=bill_surf)
             if st.button(f"Mettre à jour les paramètres pour {client_name}"):
                 update_client_rates(client_name, new_exch, new_pea, new_tax, new_mgmt, new_bill)
     columns_display = ["valeur", "quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids_masi", "poids", "__cash_marker"]
     df2 = df[columns_display].reset_index(drop=True)
     st.write("#### Actifs actuels du portefeuille")
-    st.dataframe(df2.style.hide_index().format("{:,.2f}", subset=["quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids", "poids_masi"]), use_container_width=True)
+    st.dataframe(df2.style.hide(axis="index").format("{:,.2f}", subset=["quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids", "poids_masi"]), use_container_width=True)
     with st.expander("Édition manuelle (Quantité / VWAP)", expanded=False):
         edit_cols = ["valeur", "quantité", "vwap"]
         edf = df2[edit_cols].reset_index(drop=True)
@@ -168,7 +165,7 @@ def show_portfolio(client_name, read_only=False):
         sell_shares(client_name, sell_stock, sell_price, float(sell_qty))
 
 ########################################
-# 4) View Single Portfolio
+# 4) Voir un Portefeuille Unique
 ########################################
 def page_view_client_portfolio():
     st.title("Portefeuille d'un Client")
@@ -181,7 +178,7 @@ def page_view_client_portfolio():
         show_portfolio(client_selected, read_only=False)
 
 ########################################
-# 5) View All Portfolios
+# 5) Vue Globale de Tous les Portefeuilles
 ########################################
 def page_view_all_portfolios():
     st.title("Vue Globale de Tous les Portefeuilles")
@@ -195,7 +192,7 @@ def page_view_all_portfolios():
         st.write("---")
 
 ########################################
-# 6) Inventory
+# 6) Inventaire des Actifs
 ########################################
 def page_inventory():
     st.title("Inventaire des Actifs")
@@ -237,17 +234,14 @@ def page_inventory():
             "portefeuille": ", ".join(sorted(info["clients"]))
         })
     for row in rows:
-        if sum_stocks_val > 0:
-            row["poids"] = round((row["valorisation"] / sum_stocks_val) * 100, 2)
-        else:
-            row["poids"] = 0.0
+        row["poids"] = round((row["valorisation"] / sum_stocks_val) * 100, 2) if sum_stocks_val > 0 else 0.0
     df_inv = pd.DataFrame(rows)
     fmt_dict = {"quantité total": "{:,.0f}", "valorisation": "{:,.2f}", "poids": "{:,.2f}"}
-    st.dataframe(df_inv.style.hide_index().format(fmt_dict), use_container_width=True)
+    st.dataframe(df_inv.style.hide(axis="index").format(fmt_dict), use_container_width=True)
     st.write(f"### Actif sous gestion: {overall_val:,.2f}")
 
 ########################################
-# 7) Market Page
+# 7) Marché Boursier
 ########################################
 def page_market():
     st.title("Marché Boursier")
@@ -268,10 +262,10 @@ def page_market():
     df_mkt = pd.merge(df_mkt, stx, on="valeur", how="left")
     df_mkt.rename(columns={"cours": "Cours"}, inplace=True)
     df_mkt = df_mkt[["valeur", "Cours", "Capitalisation", "Poids Masi"]]
-    st.dataframe(df_mkt.style.hide_index().format({"Cours": "{:,.2f}", "Capitalisation": "{:,.2f}", "Poids Masi": "{:,.2f}"}), use_container_width=True)
+    st.dataframe(df_mkt.style.hide(axis="index").format({"Cours": "{:,.2f}", "Capitalisation": "{:,.2f}", "Poids Masi": "{:,.2f}"}), use_container_width=True)
 
 ########################################
-# 8) Performance & Fees
+# 8) Performance & Frais
 ########################################
 def page_performance_fees():
     st.title("Performance et Frais")
@@ -388,7 +382,7 @@ def page_performance_fees():
                     "Frais": fees_,
                 }])
                 numcols = results_df.select_dtypes(include=["int", "float"]).columns
-                st.dataframe(results_df.style.hide_index().format("{:,.2f}", subset=numcols), use_container_width=True)
+                st.dataframe(results_df.style.hide(axis="index").format("{:,.2f}", subset=numcols), use_container_width=True)
     with st.expander("Résumé de Performance (tous les clients)", expanded=False):
         all_latest = get_latest_performance_period_for_all_clients()
         if all_latest.empty:
@@ -451,7 +445,7 @@ def page_performance_fees():
             else:
                 df_sum = pd.DataFrame(all_list)
                 numeric_cols = df_sum.select_dtypes(include=["int", "float"]).columns
-                st.dataframe(df_sum.style.hide_index().format("{:,.2f}", subset=numeric_cols), use_container_width=True)
+                st.dataframe(df_sum.style.hide(axis="index").format("{:,.2f}", subset=numeric_cols), use_container_width=True)
                 tot_start = df_sum["Portf Départ"].sum()
                 tot_cur = df_sum["Portf Actuel"].sum()
                 tot_fee = df_sum["Frais"].sum()
@@ -461,7 +455,7 @@ def page_performance_fees():
                     "Total Frais": tot_fee
                 }])
                 st.write("#### Totaux Globaux")
-                st.dataframe(df_tots.style.hide_index().format("{:,.2f}"), use_container_width=True)
+                st.dataframe(df_tots.style.hide(axis="index").format("{:,.2f}"), use_container_width=True)
 
 ########################################
 # SIMULATION FUNCTIONS AND HELPERS
@@ -519,7 +513,7 @@ def simulation_for_client_updated(client_name):
             "Écart": ecart
         })
     sim_df = pd.DataFrame(sim_rows, columns=["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"])
-    st.dataframe(sim_df.style.hide_index(), use_container_width=True)
+    st.dataframe(sim_df.style.hide(axis="index"), use_container_width=True)
 
 def aggregate_portfolios(client_list):
     agg = {}
@@ -568,7 +562,7 @@ def simulation_for_aggregated(agg_pf, strategy):
             "Écart": ecart
         })
     sim_df = pd.DataFrame(sim_rows, columns=["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"])
-    st.dataframe(sim_df.style.hide_index(), use_container_width=True)
+    st.dataframe(sim_df.style.hide(axis="index"), use_container_width=True)
 
 def simulation_stock_details(selected_stock, strategy, client_list):
     stocks_df = fetch_stocks()
@@ -779,14 +773,14 @@ def page_strategies_and_simulation():
                 if st.button("Afficher les détails"):
                     agg_details, repartition = simulation_stock_details(selected_stock, selected_strategy, clients_with_strat)
                     st.write("#### Détail agrégé")
-                    st.dataframe(pd.DataFrame([agg_details]).style.hide_index().format({
+                    st.dataframe(pd.DataFrame([agg_details]).style.hide(axis="index").format({
                         "Prix": "{:,.2f}",
                         "Poids cible (%)": "{:,.2f}",
                         "Valeur de l'ajustement (MAD)": "{:,.2f}",
                         "Cash disponible": "{:,.2f}"
                     }), use_container_width=True)
                     st.write("#### Pré‑répartition")
-                    st.dataframe(repartition.style.hide_index(), use_container_width=True)
+                    st.dataframe(repartition.style.hide(axis="index"), use_container_width=True)
 
 if __name__ == "__main__":
     page_strategies_and_simulation()
