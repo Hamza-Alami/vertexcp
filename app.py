@@ -15,7 +15,7 @@ from pages import (
 
 def add_sidebar_logo():
     # Use a logo hosted on your server or GitHub (ensure it’s publicly accessible)
-    st.sidebar.image("Vertex.svg", width=250)
+    st.sidebar.image("Vertex.png", width=250)
     st.sidebar.title("Vertex Capital Partners")
 
 def main():
