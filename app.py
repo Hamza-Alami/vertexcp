@@ -14,8 +14,8 @@ from pages import (
 )
 
 def add_sidebar_logo():
-    st.sidebar.image("https://raw.githubusercontent.com/Hamza-Alami/BenificiaAM/refs/heads/main/logo%2BAxiom.svg", width=250)
-    st.sidebar.title("AXIOM Asset Management")
+    st.sidebar.image("https://github.com/Hamza-Alami/HAAM/blob/main/Vertex.png", width=250)
+    st.sidebar.title("Vertex Capital Partners")
 
 def main():
     # Add logo and title to sidebar
