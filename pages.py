@@ -876,43 +876,38 @@ def simulation_for_aggregated(agg_pf, strategy):
 def simulation_stock_details(selected_stock, strategy, client_list):
     """
     For multiple portfolios, returns detailed breakdown for a selected stock.
-    It returns two items:
+    Returns:
       1. An aggregated details dictionary with:
          - "Action": the selected stock.
-         - "Prix": the stock price (rounded to 2 decimals).
+         - "Prix": the stock price (MAD) rounded to 2 decimals.
          - "Quantité actuelle agrégée": aggregated current quantity (integer).
-         - "Poids cible (%)": target percentage from the strategy.
+         - "Poids cible (%)": target percentage (2 decimals).
          - "Quantité cible agrégée": aggregated target quantity (integer).
          - "Ajustement (à acheter si positif, à vendre si négatif)": aggregated adjustment in quantity (integer).
-         - "Valeur de l'ajustement (MAD)": adjustment value in Moroccan Dirhams (rounded to 2 decimals).
-         - "Cash disponible": total cash available across all portfolios.
+         - "Valeur de l'ajustement (MAD)": adjustment value in MAD rounded to 2 decimals.
+         - "Cash disponible": total cash available across all portfolios (rounded to 2 decimals).
       2. A "Pré‑répartition" DataFrame with per‑client details including:
          - "Client"
-         - "Quantité actuelle"
-         - "Quantité Cible"
-         - "Valeur de l'ajustement (MAD)"
-         - "Cash disponible"
+         - "Quantité actuelle" (integer)
+         - "Quantité Cible" (integer)
+         - "Valeur de l'ajustement (MAD)" (2 decimals)
+         - "Cash disponible" (2 decimals)
     """
     stocks_df = fetch_stocks()
-    # Get the price for the selected stock using its raw value (ensuring 2 decimals)
     match = stocks_df[stocks_df["valeur"].str.lower() == selected_stock.lower()]
     if not match.empty:
-        price = float(match["cours"].iloc[0])
+        price = round(float(match["cours"].iloc[0]), 2)
     else:
         price = 0.0
 
-    # Get the target percentage for the selected stock from the strategy
     strategy_targets = json.loads(strategy["targets"])
     target_pct = strategy_targets.get(selected_stock, 0)
     if selected_stock.lower() == "cash":
         target_pct = 100 - sum(strategy_targets.values())
-
     aggregated_qty = 0
     total_cash_available = 0
     total_value_all = 0.0
     per_client_details = []
-
-    # Process each client to get per-client details
     for client in client_list:
         pf = get_portfolio(client)
         client_value = 0.0
@@ -922,7 +917,6 @@ def simulation_stock_details(selected_stock, strategy, client_list):
             for _, row in pf.iterrows():
                 asset = row["valeur"]
                 qty = float(row["quantité"])
-                # Use 1.0 as price for Cash, otherwise look it up
                 m = stocks_df[stocks_df["valeur"].str.lower() == asset.lower()]
                 p = 1.0 if asset.lower() == "cash" else (float(m["cours"].iloc[0]) if not m.empty else 0.0)
                 client_value += qty * p
@@ -930,7 +924,6 @@ def simulation_stock_details(selected_stock, strategy, client_list):
                     current_qty = qty
                 if asset.lower() == "cash":
                     cash_available = qty
-        # Compute the client's target quantity for the selected stock
         target_qty_client = round(client_value * (target_pct / 100) / price) if price > 0 else 0
         adjustment_client = target_qty_client - current_qty
         per_client_details.append({
@@ -938,29 +931,30 @@ def simulation_stock_details(selected_stock, strategy, client_list):
             "Quantité actuelle": int(current_qty),
             "Quantité Cible": int(target_qty_client),
             "Valeur de l'ajustement (MAD)": round(adjustment_client * price, 2),
-            "Cash disponible": cash_available
+            "Cash disponible": round(cash_available, 2)
         })
         aggregated_qty += current_qty
         total_cash_available += cash_available
         total_value_all += client_value
 
-    # Aggregated target quantity for the selected stock
     target_qty_agg = round(total_value_all * (target_pct / 100) / price) if price > 0 else 0
     adjustment_agg = target_qty_agg - aggregated_qty
-
     agg_details = {
         "Action": selected_stock,
         "Prix": round(price, 2),
         "Quantité actuelle agrégée": int(aggregated_qty),
-        "Poids cible (%)": target_pct,
+        "Poids cible (%)": round(target_pct, 2),
         "Quantité cible agrégée": int(target_qty_agg),
         "Ajustement (à acheter si positif, à vendre si négatif)": int(adjustment_agg),
         "Valeur de l'ajustement (MAD)": round(adjustment_agg * price, 2),
-        "Cash disponible": total_cash_available
+        "Cash disponible": round(total_cash_available, 2)
     }
-
     repartition_df = pd.DataFrame(per_client_details)
+    # Format repartition_df columns to show 2 decimals where needed:
+    repartition_df["Valeur de l'ajustement (MAD)"] = repartition_df["Valeur de l'ajustement (MAD)"].map("{:,.2f}".format)
+    repartition_df["Cash disponible"] = repartition_df["Cash disponible"].map("{:,.2f}".format)
     return agg_details, repartition_df
+
 
 
 
@@ -1021,50 +1015,57 @@ def page_strategies_and_simulation():
                     create_strategy(strat_name_new, st.session_state.new_strategy_targets)
                     st.session_state.new_strategy_targets = {}
                     st.success("Stratégie créée.")
-        with st.expander("Modifier/Supprimer une stratégie", expanded=False):
-            strategies_df = get_strategies()
-            if not strategies_df.empty:
-                strat_options = strategies_df["name"].tolist()
-                selected_strat_name = st.selectbox("Sélectionnez une stratégie à modifier", strat_options, key="edit_strat_select")
-                selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
-                current_targets = json.loads(selected_strategy["targets"])
-                st.write("Actions actuelles dans la stratégie :")
-                updated_targets = {}
-                for action, pct in current_targets.items():
-                    colA, colB, colC = st.columns([3,1,1])
-                    with colA:
-                        new_pct = st.number_input(f"{action} (%)", min_value=0.0, max_value=100.0, value=float(pct), step=0.5, key=f"edit_{action}")
-                    with colB:
-                        remove = st.checkbox(f"Supprimer", key=f"remove_{action}")
-                    if not remove:
-                        updated_targets[action] = new_pct
-                st.write("Ajouter une nouvelle action :")
-                colD, colE = st.columns(2)
-                with colD:
-                    add_action = st.selectbox("Nouvelle action", stock_options, key="add_strat_stock")
-                with colE:
-                    add_pct = st.number_input("Pourcentage", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="add_strat_pct")
-                if st.button("Ajouter l'action"):
-                    if add_action in updated_targets:
-                        st.error("Action déjà présente.")
-                    else:
-                        updated_targets[add_action] = add_pct
-                        st.success(f"{add_action} ajouté avec {add_pct}%")
-                total_updated = sum(updated_targets.values())
-                cash_updated = 100 - total_updated
-                display_df = pd.DataFrame(list(updated_targets.items()), columns=["Action", "Pourcentage"])
-                display_df = pd.concat([display_df, pd.DataFrame([{"Action": "Cash", "Pourcentage": cash_updated}])], ignore_index=True)
-                st.table(display_df)
-                if st.button("Mettre à jour la stratégie"):
-                    if total_updated > 100:
-                        st.error(f"Le total dépasse 100% de {total_updated - 100}%.")
-                    else:
-                        update_strategy(selected_strategy["id"], selected_strat_name, updated_targets)
-                # Added delete button
-                if st.button("Supprimer la stratégie"):
-                    delete_strategy(selected_strategy["id"])
-            else:
-                st.info("Aucune stratégie à modifier.")
+    with st.expander("Modifier/Supprimer une stratégie", expanded=False):
+        strategies_df = get_strategies()
+        if not strategies_df.empty:
+            strat_options = strategies_df["name"].tolist()
+            selected_strat_name = st.selectbox("Sélectionnez une stratégie à modifier", strat_options, key="edit_strat_select")
+            selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
+            # Initialize session state for updated targets if not already set
+            if "updated_strategy_targets" not in st.session_state or st.session_state.updated_strategy_targets.get("strategy_id") != selected_strategy["id"]:
+                st.session_state.updated_strategy_targets = {"strategy_id": selected_strategy["id"], "targets": json.loads(selected_strategy["targets"])}
+            current_targets = st.session_state.updated_strategy_targets["targets"]
+    
+            st.write("Actions actuelles dans la stratégie :")
+            # Allow editing or removal
+            for action, pct in current_targets.copy().items():
+                colA, colB = st.columns([3,1])
+                new_pct = colA.number_input(f"{action} (%)", min_value=0.0, max_value=100.0, value=float(pct), step=0.5, key=f"edit_{action}")
+                remove = colB.checkbox("Supprimer", key=f"remove_{action}")
+                if remove:
+                    current_targets.pop(action)
+                else:
+                    current_targets[action] = new_pct
+    
+            st.write("Ajouter une nouvelle action :")
+            colD, colE = st.columns(2)
+            add_action = colD.selectbox("Nouvelle action", stock_options, key="add_strat_stock")
+            add_pct = colE.number_input("Pourcentage", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="add_strat_pct")
+            if st.button("Ajouter l'action"):
+                if add_action in current_targets:
+                    st.error("Action déjà présente.")
+                else:
+                    current_targets[add_action] = add_pct
+                    st.success(f"{add_action} ajouté avec {add_pct}%")
+    
+            total_updated = sum(current_targets.values())
+            cash_updated = 100 - total_updated
+            display_df = pd.DataFrame(list(current_targets.items()), columns=["Action", "Pourcentage"])
+            display_df = pd.concat([display_df, pd.DataFrame([{"Action": "Cash", "Pourcentage": cash_updated}])], ignore_index=True)
+            st.table(display_df)
+            if st.button("Mettre à jour la stratégie"):
+                if total_updated > 100:
+                    st.error(f"Le total dépasse 100% de {total_updated - 100}%.")
+                else:
+                    update_strategy(selected_strategy["id"], selected_strat_name, current_targets)
+                    st.success("Stratégie mise à jour.")
+                    # Clear the session state for updated targets so next modification starts fresh.
+                    st.session_state.pop("updated_strategy_targets")
+            if st.button("Supprimer la stratégie"):
+                delete_strategy(selected_strategy["id"])
+        else:
+            st.info("Aucune stratégie à modifier.")
+
 
     # Tab 1: Assignation aux Clients
     with tabs[1]:
@@ -1120,9 +1121,15 @@ def page_strategies_and_simulation():
                 if st.button("Afficher les détails"):
                     agg_details, repartition = simulation_stock_details(selected_stock, selected_strategy, clients_with_strat)
                     st.write("#### Détail agrégé")
-                    st.table(pd.DataFrame([agg_details]))
+                    st.dataframe(pd.DataFrame([agg_details]).style.format({
+                        "Prix": "{:,.2f}",
+                        "Poids cible (%)": "{:,.2f}",
+                        "Valeur de l'ajustement (MAD)": "{:,.2f}",
+                        "Cash disponible": "{:,.2f}"
+                    }), use_container_width=True)
                     st.write("#### Pré‑répartition")
-                    st.table(repartition)
+                    st.dataframe(repartition, use_container_width=True)
+
 
 
 # Expose the page function
