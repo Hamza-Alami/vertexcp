@@ -114,19 +114,8 @@ def show_portfolio(client_name, read_only=False):
             if c in df.columns:
                 df.drop(columns=c, inplace=True)
         columns_display = ["valeur", "quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids", "poids_masi"]
-        df_disp = df[columns_display].copy().reset_index(drop=True)
-        def color_perf(x):
-            if isinstance(x, (float, int)) and x > 0:
-                return "color:green;"
-            elif isinstance(x, (float, int)) and x < 0:
-                return "color:red;"
-            return ""
-        def bold_cash(row):
-            if row["valeur"] == "Cash":
-                return ["font-weight:bold;"] * len(row)
-            return ["" for _ in row]
-        df_styled = df_disp.style.hide_index().format("{:,.2f}", subset=["quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids", "poids_masi"]).applymap(color_perf, subset=["performance_latente"]).apply(bold_cash, axis=1)
-        st.dataframe(df_styled, use_container_width=True)
+        df_disp = df[columns_display].reset_index(drop=True)
+        st.table(df_disp)  # st.table automatically hides the index after reset_index(drop=True)
         return
     cinfo = get_client_info(client_name)
     if cinfo:
@@ -144,23 +133,12 @@ def show_portfolio(client_name, read_only=False):
             if st.button(f"Mettre à jour les paramètres pour {client_name}"):
                 update_client_rates(client_name, new_exch, new_pea, new_tax, new_mgmt, new_bill)
     columns_display = ["valeur", "quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids_masi", "poids", "__cash_marker"]
-    df2 = df[columns_display].copy().reset_index(drop=True)
-    def color_perf(x):
-        if isinstance(x, (float,int)) and x > 0:
-            return "color:green;"
-        elif isinstance(x, (float,int)) and x < 0:
-            return "color:red;"
-        return ""
-    def bold_cash(row):
-        if row["valeur"]=="Cash":
-            return ["font-weight:bold;"]*len(row)
-        return ["" for _ in row]
-    df_styled = df2.drop(columns="__cash_marker").style.hide_index().format("{:,.2f}", subset=["quantité","vwap","cours","cost_total","valorisation","performance_latente","poids_masi","poids"]).applymap(color_perf, subset=["performance_latente"]).apply(bold_cash, axis=1)
+    df2 = df[columns_display].reset_index(drop=True)
     st.write("#### Actifs actuels du portefeuille")
-    st.dataframe(df_styled, use_container_width=True)
+    st.dataframe(df2.style.hide_index().format("{:,.2f}", subset=["quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids", "poids_masi"]), use_container_width=True)
     with st.expander("Édition manuelle (Quantité / VWAP)", expanded=False):
         edit_cols = ["valeur", "quantité", "vwap"]
-        edf = df2[edit_cols].drop(columns="__cash_marker", errors="ignore").copy().reset_index(drop=True)
+        edf = df2[edit_cols].reset_index(drop=True)
         edf["quantité"] = edf["quantité"].astype(int, errors="ignore")
         updated_df = st.data_editor(edf, use_container_width=True)
         if st.button("💾 Enregistrer modifications"):
@@ -179,14 +157,14 @@ def show_portfolio(client_name, read_only=False):
     _stocks = db_utils.fetch_stocks()
     buy_stock = st.selectbox("Choisir la valeur à acheter", _stocks["valeur"].tolist())
     buy_price = st.number_input("Prix d'achat", min_value=0.0, value=0.0, step=0.01)
-    buy_qty   = st.number_input("Quantité à acheter", min_value=1, value=1, step=1)
+    buy_qty = st.number_input("Quantité à acheter", min_value=1, value=1, step=1)
     if st.button("Acheter"):
         buy_shares(client_name, buy_stock, buy_price, float(buy_qty))
     st.write("### Opération de Vente")
-    existing_stocks = df2[df2["valeur"] != "Cash"]["valeur"].unique().tolist()
-    sell_stock = st.selectbox("Choisir la valeur à vendre", existing_stocks)
+    existing_stocks = df2["valeur"].unique().tolist()
+    sell_stock = st.selectbox("Choisir la valeur à vendre", [s for s in existing_stocks if s != "Cash"])
     sell_price = st.number_input("Prix de vente", min_value=0.0, value=0.0, step=0.01)
-    sell_qty   = st.number_input("Quantité à vendre", min_value=1, value=1, step=1)
+    sell_qty = st.number_input("Quantité à vendre", min_value=1, value=1, step=1)
     if st.button("Vendre"):
         sell_shares(client_name, sell_stock, sell_price, float(sell_qty))
 
@@ -442,7 +420,7 @@ def page_performance_fees():
                     for _, prow2 in pdf2.iterrows():
                         v2 = str(prow2["valeur"])
                         q2 = float(prow2["quantité"])
-                        mt2 = stx2[stx2["valeur"] == v2]
+                        mt2 = stx2[stx2["valeur"]== v2]
                         px2 = float(mt2["cours"].values[0]) if not mt2.empty else 0.0
                         cur_val2 += (q2 * px2)
                 gains_port2 = cur_val2 - st_val
@@ -453,7 +431,7 @@ def page_performance_fees():
                 surp_abs2 = (surp_pct2 / 100.0) * st_val
                 cinfo2 = get_client_info(name_)
                 mgmtr2 = float(cinfo2.get("management_fee_rate",0)) / 100.0
-                if cinfo2.get("bill_surperformance", False):
+                if cinfo2.get("bill_surperformance",False):
                     base2 = max(0, surp_abs2)
                     fee2 = base2 * mgmtr2
                 else:
@@ -814,6 +792,5 @@ def page_strategies_and_simulation():
                     st.write("#### Pré‑répartition")
                     st.dataframe(repartition.style.hide_index(), use_container_width=True)
 
-# Expose the page function
 if __name__ == "__main__":
     page_strategies_and_simulation()
