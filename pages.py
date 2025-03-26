@@ -115,7 +115,7 @@ def show_portfolio(client_name, read_only=False):
                 df.drop(columns=c, inplace=True)
         columns_display = ["valeur", "quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids", "poids_masi"]
         df_disp = df[columns_display].reset_index(drop=True)
-        st.table(df_disp)  # st.table automatically hides the index after reset_index(drop=True)
+        st.table(df_disp)
         return
     cinfo = get_client_info(client_name)
     if cinfo:
@@ -633,7 +633,6 @@ def simulation_stock_details(selected_stock, strategy, client_list):
     repartition_df["Valeur de l'ajustement (MAD)"] = repartition_df["Valeur de l'ajustement (MAD)"].apply(lambda x: f"{x:,.2f}")
     repartition_df["Cash disponible"] = repartition_df["Cash disponible"].apply(lambda x: f"{x:,.2f}")
     return agg_details, repartition_df
-
 ########################################
 # PAGE : STRATÉGIES ET SIMULATION
 ########################################
