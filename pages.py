@@ -961,6 +961,7 @@ def simulation_stock_details(selected_stock, strategy, client_list):
 ########################################
 # PAGE : STRATÉGIES ET SIMULATION
 ########################################
+
 def page_strategies_and_simulation():
     st.title("Stratégies et Simulation")
     tabs = st.tabs(["Gestion des Stratégies", "Assignation aux Clients", "Simulation de Stratégie"])
@@ -977,9 +978,7 @@ def page_strategies_and_simulation():
                     targets["Cash"] = cash
                     details = ", ".join([f"{k} : {v}%" for k, v in targets.items()])
                     display_rows.append({"Nom": row["name"], "Détails": details})
-                df_disp = pd.DataFrame(display_rows)
-                df_disp.reset_index(drop=True, inplace=True)
-                st.table(df_disp)
+                st.table(pd.DataFrame(display_rows))
             else:
                 st.info("Aucune stratégie existante.")
         with st.expander("Créer une nouvelle stratégie", expanded=False):
@@ -1001,7 +1000,6 @@ def page_strategies_and_simulation():
                 total_weight = df_new["Pourcentage"].sum()
                 cash_pct = 100 - total_weight
                 df_display = pd.concat([df_new, pd.DataFrame([{"Action": "Cash", "Pourcentage": cash_pct}])], ignore_index=True)
-                df_display.reset_index(drop=True, inplace=True)
                 st.table(df_display)
                 if total_weight > 100:
                     st.error(f"Le total dépasse 100% de {total_weight - 100}%.")
@@ -1023,10 +1021,13 @@ def page_strategies_and_simulation():
                 strat_options = strategies_df["name"].tolist()
                 selected_strat_name = st.selectbox("Sélectionnez une stratégie à modifier", strat_options, key="edit_strat_select")
                 selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
+                # Initialize session state for updated targets if not already set
                 if "updated_strategy_targets" not in st.session_state or st.session_state.updated_strategy_targets.get("strategy_id") != selected_strategy["id"]:
                     st.session_state.updated_strategy_targets = {"strategy_id": selected_strategy["id"], "targets": json.loads(selected_strategy["targets"])}
                 current_targets = st.session_state.updated_strategy_targets["targets"]
+        
                 st.write("Actions actuelles dans la stratégie :")
+                # Allow editing or removal
                 for action, pct in current_targets.copy().items():
                     colA, colB = st.columns([3,1])
                     new_pct = colA.number_input(f"{action} (%)", min_value=0.0, max_value=100.0, value=float(pct), step=0.5, key=f"edit_{action}")
@@ -1035,6 +1036,7 @@ def page_strategies_and_simulation():
                         current_targets.pop(action)
                     else:
                         current_targets[action] = new_pct
+        
                 st.write("Ajouter une nouvelle action :")
                 colD, colE = st.columns(2)
                 add_action = colD.selectbox("Nouvelle action", stock_options, key="add_strat_stock")
@@ -1045,11 +1047,11 @@ def page_strategies_and_simulation():
                     else:
                         current_targets[add_action] = add_pct
                         st.success(f"{add_action} ajouté avec {add_pct}%")
+        
                 total_updated = sum(current_targets.values())
                 cash_updated = 100 - total_updated
                 display_df = pd.DataFrame(list(current_targets.items()), columns=["Action", "Pourcentage"])
                 display_df = pd.concat([display_df, pd.DataFrame([{"Action": "Cash", "Pourcentage": cash_updated}])], ignore_index=True)
-                display_df.reset_index(drop=True, inplace=True)
                 st.table(display_df)
                 if st.button("Mettre à jour la stratégie"):
                     if total_updated > 100:
@@ -1057,11 +1059,13 @@ def page_strategies_and_simulation():
                     else:
                         update_strategy(selected_strategy["id"], selected_strat_name, current_targets)
                         st.success("Stratégie mise à jour.")
+                        # Clear the session state for updated targets so next modification starts fresh.
                         st.session_state.pop("updated_strategy_targets")
                 if st.button("Supprimer la stratégie"):
                     delete_strategy(selected_strategy["id"])
             else:
                 st.info("Aucune stratégie à modifier.")
+
 
     # Tab 1: Assignation aux Clients
     with tabs[1]:
@@ -1094,9 +1098,8 @@ def page_strategies_and_simulation():
     with tabs[2]:
         st.header("Simulation de Stratégie")
         mode = st.radio("Mode de simulation", options=["Portefeuille Unique", "Portefeuilles Multiples"], key="sim_mode")
-        
         if mode == "Portefeuille Unique":
-            client_sim = st.selectbox("Sélectionnez un client", get_all_clients(), key="sim_client")
+            client_sim = st.selectbox("Sélectionner un client", get_all_clients(), key="sim_client")
             if client_sim:
                 simulation_for_client_updated(client_sim)
         else:
@@ -1113,14 +1116,11 @@ def page_strategies_and_simulation():
                 agg_pf = aggregate_portfolios(clients_with_strat)
                 simulation_for_aggregated(agg_pf, selected_strategy)
                 st.write("### Détail par action")
-                # Create a list that includes assets present in either the aggregated portfolio or in the strategy targets.
                 stock_options = list(set(agg_pf["valeur"].tolist()).union(set(json.loads(selected_strategy["targets"]).keys())))
-                selected_stock = st.selectbox("Sélectionnez une action", stock_options, key="detail_stock")
+                selected_stock = st.selectbox("Sélectionner une action", stock_options, key="detail_stock")
                 if st.button("Afficher les détails"):
-                    # Call the simulation function that now returns the additional columns
                     agg_details, repartition = simulation_stock_details(selected_stock, selected_strategy, clients_with_strat)
                     st.write("#### Détail agrégé")
-                    # Display aggregated details with columns formatted to two decimals where appropriate.
                     st.dataframe(pd.DataFrame([agg_details]).style.format({
                         "Prix": "{:,.2f}",
                         "Poids cible (%)": "{:,.2f}",
@@ -1128,10 +1128,10 @@ def page_strategies_and_simulation():
                         "Cash disponible": "{:,.2f}"
                     }), use_container_width=True)
                     st.write("#### Pré‑répartition")
-                    # The repartition table now includes the new columns "Ajustement" and "Capacité d'achat"
                     st.dataframe(repartition, use_container_width=True)
 
 
 
+# Expose the page function
 if __name__ == "__main__":
     page_strategies_and_simulation()
