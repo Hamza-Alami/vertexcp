@@ -1,6 +1,7 @@
 import streamlit as st
 
-st.set_page_config(layout="wide")
+# Set wide layout and other page config settings
+st.set_page_config(page_title="Vertex Asset Management", layout="wide", initial_sidebar_state="expanded")
 
 from pages import (
     page_manage_clients,
@@ -14,12 +15,12 @@ from pages import (
 )
 
 def add_sidebar_logo():
-    st.sidebar.image("Vertex.png", width=100)
+    # You can change the image URL to one hosted on GitHub or any CDN
+    st.sidebar.image("https://www.axiom-am.com/images/logo-home.svg", width=250)
     st.sidebar.title("Vertex Capital Partners")
 
 def main():
     add_sidebar_logo()
-    
     page = st.sidebar.selectbox(
         "📂 Navigation",
         [
