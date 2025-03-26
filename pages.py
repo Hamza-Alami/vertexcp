@@ -1094,6 +1094,7 @@ def page_strategies_and_simulation():
     with tabs[2]:
         st.header("Simulation de Stratégie")
         mode = st.radio("Mode de simulation", options=["Portefeuille Unique", "Portefeuilles Multiples"], key="sim_mode")
+        
         if mode == "Portefeuille Unique":
             client_sim = st.selectbox("Sélectionnez un client", get_all_clients(), key="sim_client")
             if client_sim:
@@ -1112,11 +1113,14 @@ def page_strategies_and_simulation():
                 agg_pf = aggregate_portfolios(clients_with_strat)
                 simulation_for_aggregated(agg_pf, selected_strategy)
                 st.write("### Détail par action")
+                # Create a list that includes assets present in either the aggregated portfolio or in the strategy targets.
                 stock_options = list(set(agg_pf["valeur"].tolist()).union(set(json.loads(selected_strategy["targets"]).keys())))
                 selected_stock = st.selectbox("Sélectionnez une action", stock_options, key="detail_stock")
                 if st.button("Afficher les détails"):
+                    # Call the simulation function that now returns the additional columns
                     agg_details, repartition = simulation_stock_details(selected_stock, selected_strategy, clients_with_strat)
                     st.write("#### Détail agrégé")
+                    # Display aggregated details with columns formatted to two decimals where appropriate.
                     st.dataframe(pd.DataFrame([agg_details]).style.format({
                         "Prix": "{:,.2f}",
                         "Poids cible (%)": "{:,.2f}",
@@ -1124,7 +1128,9 @@ def page_strategies_and_simulation():
                         "Cash disponible": "{:,.2f}"
                     }), use_container_width=True)
                     st.write("#### Pré‑répartition")
+                    # The repartition table now includes the new columns "Ajustement" and "Capacité d'achat"
                     st.dataframe(repartition, use_container_width=True)
+
 
 
 if __name__ == "__main__":
