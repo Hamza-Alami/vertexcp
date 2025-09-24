@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
-import json  
+import json
 from collections import defaultdict
 from datetime import date
 
-import db_utils 
+import db_utils
 from db_utils import (
     get_all_clients,
     get_client_id,
@@ -15,7 +15,7 @@ from db_utils import (
     update_client_rates,
     client_has_portfolio,
     get_portfolio,
-    get_supabase, 
+    get_supabase,
     get_performance_periods_for_client,
     create_performance_period,
     get_latest_performance_period_for_all_clients,
@@ -25,7 +25,7 @@ from logic import (
     buy_shares,
     sell_shares,
     new_portfolio_creation_ui,
-    poids_masi_map,
+    get_poids_masi_map,   # <-- replaced poids_masi_map with function
     get_current_masi
 )
 
@@ -95,6 +95,9 @@ def show_portfolio(client_name, read_only=False):
     if "quantité" in df.columns:
         # We attempt an integer cast: if there's any fractional you want to floor or round
         df["quantité"] = df["quantité"].astype(int, errors="ignore")
+
+    # Load poids_masi lazily (cached in logic.py)
+    poids_masi_map = get_poids_masi_map()
 
     # Recalculate columns
     for i, row in df.iterrows():
@@ -369,10 +372,8 @@ def page_market():
     st.title("Marché Boursier")
     st.write("Les cours affichés peuvent avoir un décalage (~15 min).")
 
-    from logic import compute_poids_masi
-    from db_utils import fetch_stocks
-
-    mm = compute_poids_masi()
+    # Use cached get_poids_masi_map (lazy, safe)
+    mm = get_poids_masi_map()
     if not mm:
         st.warning("Aucun instrument trouvé / BD vide.")
         return
@@ -383,8 +384,8 @@ def page_market():
     for val, info in mm.items():
         rows.append({
             "valeur": val,
-            "Capitalisation": info["capitalisation"],
-            "Poids Masi": info["poids_masi"]
+            "Capitalisation": info.get("capitalisation", 0.0),
+            "Poids Masi": info.get("poids_masi", 0.0)
         })
     df_mkt = pd.DataFrame(rows)
     df_mkt = pd.merge(df_mkt, stx, on="valeur", how="left")
@@ -694,7 +695,7 @@ def create_strategy(name, targets):
     """
     Create a new strategy.
     targets: a dictionary mapping asset names to target percentages.
-             (Cash is not entered – it is auto‑calculated as 100 minus the sum of percentages.)
+             (Cash is not entered – it is auto-calculated as 100 minus the sum of percentages.)
     """
     try:
         row = {"name": name, "targets": json.dumps(targets)}
@@ -886,7 +887,7 @@ def simulation_stock_details(selected_stock, strategy, client_list):
          - "Ajustement (à acheter si positif, à vendre si négatif)": aggregated adjustment in quantity (integer).
          - "Valeur de l'ajustement (MAD)": adjustment value in MAD rounded to 2 decimals.
          - "Cash disponible": total cash available across all portfolios (rounded to 2 decimals).
-      2. A "Pré‑répartition" DataFrame with per‑client details including:
+      2. A "Pré-répartition" DataFrame with per-client details including:
          - "Client"
          - "Quantité actuelle" (integer)
          - "Quantité Cible" (integer)
@@ -1127,7 +1128,7 @@ def page_strategies_and_simulation():
                         "Valeur de l'ajustement (MAD)": "{:,.2f}",
                         "Cash disponible": "{:,.2f}"
                     }), use_container_width=True)
-                    st.write("#### Pré‑répartition")
+                    st.write("#### Pré-répartition")
                     st.dataframe(repartition, use_container_width=True)
 
 
