@@ -1,5 +1,3 @@
-# logic.py
-
 import streamlit as st
 import pandas as pd
 
@@ -23,7 +21,11 @@ from db_utils import (
 
 def get_current_masi():
     """Return the real-time MASI index from Casablanca Bourse."""
-    return db_utils.fetch_masi_from_cb()
+    try:
+        return db_utils.fetch_masi_from_cb()
+    except Exception as e:
+        st.error(f"Erreur récupération MASI: {e}")
+        return 0.0
 
 ######################################################
 #  Compute Poids Masi for each "valeur"
@@ -34,11 +36,21 @@ def compute_poids_masi():
     Creates a dictionary { valeur: {"capitalisation": X, "poids_masi": Y}, ... }
     by merging instruments + stocks => capitalisation => floated_cap => sum => percentage.
     """
-    instruments_df = fetch_instruments()
+    try:
+        instruments_df = fetch_instruments()
+    except Exception as e:
+        st.error(f"Erreur récupération instruments Supabase: {e}")
+        return {}
+
     if instruments_df.empty:
         return {}
 
-    stocks_df = fetch_stocks()
+    try:
+        stocks_df = fetch_stocks()
+    except Exception as e:
+        st.error(f"Erreur récupération des cours: {e}")
+        return {}
+
     instr_renamed = instruments_df.rename(columns={"instrument_name": "valeur"})
     merged = pd.merge(instr_renamed, stocks_df, on="valeur", how="left")
 
@@ -66,8 +78,14 @@ def compute_poids_masi():
         }
     return outdict
 
-# Global dictionary for Poids Masi
-poids_masi_map = compute_poids_masi()
+
+# ❌ Removed the heavy query at import time
+# poids_masi_map = compute_poids_masi()
+
+# ✅ Replace with cached function to load lazily
+@st.cache_data(ttl=300)
+def get_poids_masi_map():
+    return compute_poids_masi()
 
 ######################################################
 #   Create a brand-new portfolio
@@ -119,7 +137,12 @@ def new_portfolio_creation_ui(client_name: str):
     if "temp_holdings" not in st.session_state:
         st.session_state.temp_holdings = {}
 
-    all_stocks = fetch_stocks()
+    try:
+        all_stocks = fetch_stocks()
+    except Exception as e:
+        st.error(f"Erreur chargement stocks: {e}")
+        return
+
     chosen_val = st.selectbox(f"Choisir une valeur ou 'Cash'", all_stocks["valeur"].tolist(), key=f"new_stock_{client_name}")
     qty = st.number_input(
         f"Quantité pour {client_name}",
@@ -241,7 +264,7 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
 def sell_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
     cinfo = get_client_info(client_name)
     if not cinfo:
-        st.error("Client introuvable.")
+        st.error("Informations du client introuvables.")
         return
 
     cid = get_client_id(client_name)
