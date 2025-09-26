@@ -1,5 +1,3 @@
-# db_utils.py
-
 import pandas as pd
 import streamlit as st
 import requests
@@ -41,7 +39,6 @@ def fetch_masi_from_cb():
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         data = r.json()
-        # data = { "data": [ { "title": "...", "items": [...] }, ... ] }
         for block in data.get("data", []):
             if block.get("title") == "Principaux indices":
                 for item in block.get("items", []):
@@ -79,8 +76,26 @@ def _cached_fetch_stocks():
         return pd.DataFrame(columns=["valeur", "cours"])
 
 def fetch_stocks():
-    """Return the 'stocks' DataFrame from the IDBourse API, cached for 60s."""
-    return _cached_fetch_stocks()
+    """
+    Return the 'stocks' DataFrame from the IDBourse API, cached for 60s.
+    Override: Replace 'ARADEI CAPITAL' with 'VICENNE' and hardcode its price to 440.
+    """
+    df = _cached_fetch_stocks()
+
+    override_real_name = "ARADEI CAPITAL"   # as it comes from API
+    custom_name        = "VICENNE"          # name you want in the app
+    custom_price       = 440.0              # hardcoded price
+
+    mask = df["valeur"] == override_real_name
+    if mask.any():
+        df.loc[mask, "valeur"] = custom_name
+        df.loc[mask, "cours"] = custom_price
+    else:
+        # Add manually if ARADEI CAPITAL is not in the API response
+        new_row = pd.DataFrame([{"valeur": custom_name, "cours": custom_price}])
+        df = pd.concat([df, new_row], ignore_index=True)
+
+    return df
 
 def fetch_instruments():
     """
@@ -110,12 +125,7 @@ def get_all_clients():
     return [r["name"] for r in res.data]
 
 def get_client_info(client_name: str):
-    """
-    Return the client row as a dict:
-    { id, name, exchange_commission_rate, tax_on_gains_rate, 
-      is_pea, management_fee_rate, bill_surperformance, ...}
-    or None if not found.
-    """
+    """Return the client row as a dict or None if not found."""
     res = client_table().select("*").eq("name", client_name).execute()
     if res.data:
         return res.data[0]
@@ -149,9 +159,6 @@ def get_portfolio(client_name: str) -> pd.DataFrame:
 ##################################################
 
 def create_client(name: str):
-    """
-    Insert a new client with minimal fields. 
-    """
     if not name:
         st.error("Nom du client invalide.")
         return
@@ -163,9 +170,6 @@ def create_client(name: str):
         st.error(f"Erreur lors de la création du client: {e}")
 
 def rename_client(old_name: str, new_name: str):
-    """
-    Update the 'name' field for an existing client.
-    """
     cid = get_client_id(old_name)
     if cid is None:
         st.error("Client introuvable.")
@@ -178,7 +182,6 @@ def rename_client(old_name: str, new_name: str):
         st.error(f"Erreur lors du renommage: {e}")
 
 def delete_client(cname: str):
-    """Delete a client by name."""
     cid = get_client_id(cname)
     if cid is None:
         st.error("Client introuvable.")
@@ -196,14 +199,6 @@ def update_client_rates(client_name: str,
                         custom_tax: float, 
                         mgmt_fee: float, 
                         bill_surperf: bool):
-    """
-    Update the client's financial parameters:
-      - exchange_commission_rate
-      - tax_on_gains_rate (0 if is_pea=True)
-      - is_pea
-      - management_fee_rate
-      - bill_surperformance => bool
-    """
     cid = get_client_id(client_name)
     if cid is None:
         st.error("Client introuvable.")
@@ -223,21 +218,10 @@ def update_client_rates(client_name: str,
         st.error(f"Erreur lors de la mise à jour des taux: {e}")
 
 ##################################################
-#       Performance Periods (start_value, etc.)
+#       Performance Periods
 ##################################################
 
-def create_performance_period(client_id: int, 
-                              start_date_str: str, 
-                              start_val: float, 
-                              masi_start_value: float):
-    """
-    Insert a new row in 'performance_periods'.
-    Fields:
-      - client_id
-      - start_date => string 'YYYY-MM-DD'
-      - start_value => float
-      - masi_start_value => float
-    """
+def create_performance_period(client_id: int, start_date_str: str, start_val: float, masi_start_value: float):
     if not client_id:
         st.error("ID client invalide.")
         return
@@ -253,42 +237,27 @@ def create_performance_period(client_id: int,
         st.error(f"Erreur lors de la création d'une période de performance: {e}")
 
 def get_performance_periods_for_client(client_id: int) -> pd.DataFrame:
-    """Return all rows from 'performance_periods' for a given client, sorted by date ascending."""
     res = performance_table().select("*").eq("client_id", client_id).order("start_date", desc=False).execute()
     if not res.data:
         return pd.DataFrame()
     return pd.DataFrame(res.data)
 
 def get_latest_performance_period_for_all_clients() -> pd.DataFrame:
-    """
-    For each client, pick the row with the max start_date from performance_periods.
-    Return DataFrame with columns: [id, client_id, start_date, start_value, masi_start_value, ...].
-    """
     res = performance_table().select("*").execute()
     if not res.data:
         return pd.DataFrame()
     df = pd.DataFrame(res.data)
     if df.empty or "start_date" not in df.columns:
         return pd.DataFrame()
-
     df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
     df_sorted = df.sort_values(["client_id", "start_date"], ascending=[True, False])
-    # groupby client_id => top row (most recent date)
-    df_latest = df_sorted.groupby("client_id", as_index=False).head(1)
-    return df_latest
+    return df_sorted.groupby("client_id", as_index=False).head(1)
 
 def update_performance_period_rows(old_df: pd.DataFrame, new_df: pd.DataFrame):
-    """
-    Compare old_df vs new_df from st.data_editor and apply changes to 'performance_periods'.
-    We'll assume each row has an integer 'id' primary key.
-    Only updates existing rows (no new row insertion or old row deletion here).
-    """
-    # Convert date => string if needed
     for idx, row in new_df.iterrows():
         rec_id = row.get("id", None)
         if rec_id is None:
-            continue  # if there's no ID, skip
-        # We do a simple approach: re-insert start_date as isoformat if it's a date
+            continue
         start_dt = row.get("start_date")
         if isinstance(start_dt, date):
             start_dt_str = start_dt.isoformat()
@@ -296,11 +265,8 @@ def update_performance_period_rows(old_df: pd.DataFrame, new_df: pd.DataFrame):
             start_dt_str = start_dt.date().isoformat()
         else:
             start_dt_str = str(start_dt)
-
         new_start_val = float(row.get("start_value", 0))
         new_masi_val = float(row.get("masi_start_value", 0))
-
-        # Attempt an update
         try:
             performance_table().update({
                 "start_date": start_dt_str,
