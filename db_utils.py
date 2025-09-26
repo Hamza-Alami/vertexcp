@@ -143,11 +143,17 @@ def client_has_portfolio(client_name: str) -> bool:
     return len(port.data) > 0
 
 def get_portfolio(client_name: str) -> pd.DataFrame:
+    """Return a DataFrame with portfolio rows for 'client_name'. Normalize ARADEI → VICENNE."""
     cid = get_client_id(client_name)
     if cid is None:
         return pd.DataFrame()
     res = portfolio_table().select("*").eq("client_id", cid).execute()
-    return pd.DataFrame(res.data)
+    df = pd.DataFrame(res.data)
+
+    if not df.empty and "valeur" in df.columns:
+        df["valeur"] = df["valeur"].replace("ARADEI CAPITAL", "VICENNE")
+
+    return df
 
 ##################################################
 #        CRUD for Clients & Rates
