@@ -78,20 +78,20 @@ def _cached_fetch_stocks():
 def fetch_stocks():
     """
     Return the 'stocks' DataFrame from the IDBourse API, cached for 60s.
-    Override: Replace 'ARADEI CAPITAL' with 'VICENNE' and hardcode its price to 440.
+    Override: Replace 'ARADEI CAPITAL' with 'VICENNE' and force cours=440.
     """
-    df = _cached_fetch_stocks()
+    df = _cached_fetch_stocks().copy()
 
-    override_real_name = "ARADEI CAPITAL"   # as it comes from API
-    custom_name        = "VICENNE"          # name you want in the app
-    custom_price       = 440.0              # hardcoded price
+    override_real_name = "ARADEI CAPITAL"
+    custom_name = "VICENNE"
+    custom_price = 440.0
 
     mask = df["valeur"] == override_real_name
     if mask.any():
         df.loc[mask, "valeur"] = custom_name
         df.loc[mask, "cours"] = custom_price
     else:
-        # Add manually if ARADEI CAPITAL is not in the API response
+        # In case ARADEI CAPITAL is missing from API, just add VICENNE
         new_row = pd.DataFrame([{"valeur": custom_name, "cours": custom_price}])
         df = pd.concat([df, new_row], ignore_index=True)
 
@@ -118,28 +118,24 @@ def fetch_instruments():
 ##################################################
 
 def get_all_clients():
-    """Return a list of all client names from 'clients' table."""
     res = client_table().select("*").execute()
     if not res.data:
         return []
     return [r["name"] for r in res.data]
 
 def get_client_info(client_name: str):
-    """Return the client row as a dict or None if not found."""
     res = client_table().select("*").eq("name", client_name).execute()
     if res.data:
         return res.data[0]
     return None
 
 def get_client_id(client_name: str):
-    """Return integer ID for this client or None if not found."""
     cinfo = get_client_info(client_name)
     if not cinfo:
         return None
     return int(cinfo["id"])
 
 def client_has_portfolio(client_name: str) -> bool:
-    """Check if 'client_name' already has at least one row in 'portfolios'."""
     cid = get_client_id(client_name)
     if cid is None:
         return False
@@ -147,7 +143,6 @@ def client_has_portfolio(client_name: str) -> bool:
     return len(port.data) > 0
 
 def get_portfolio(client_name: str) -> pd.DataFrame:
-    """Return a DataFrame with portfolio rows for 'client_name'."""
     cid = get_client_id(client_name)
     if cid is None:
         return pd.DataFrame()
@@ -251,7 +246,8 @@ def get_latest_performance_period_for_all_clients() -> pd.DataFrame:
         return pd.DataFrame()
     df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
     df_sorted = df.sort_values(["client_id", "start_date"], ascending=[True, False])
-    return df_sorted.groupby("client_id", as_index=False).head(1)
+    df_latest = df_sorted.groupby("client_id", as_index=False).head(1)
+    return df_latest
 
 def update_performance_period_rows(old_df: pd.DataFrame, new_df: pd.DataFrame):
     for idx, row in new_df.iterrows():
