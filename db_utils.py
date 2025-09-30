@@ -32,23 +32,25 @@ def fetch_masi_from_cb():
     """
     Fetches JSON from Casablanca Bourse for 'Principaux indices'
     and returns the current MASI index value as float.
-    If not found, returns 0.0 (or logs an error).
     """
     url = "https://www.casablanca-bourse.com/api/proxy/fr/api/bourse/dashboard/grouped_index_watch?"
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         data = r.json()
+
         for block in data.get("data", []):
-            if block.get("title") == "Principaux indices":
+            title = (block.get("title") or "").strip().lower()
+            if "principaux" in title and "indice" in title:
                 for item in block.get("items", []):
-                    if item.get("index") == "MASI":
+                    if (item.get("index") or "").strip().upper() == "MASI":
                         val_str = item.get("field_index_value", "0")
                         return float(val_str)
         return 0.0
     except Exception as e:
         print("Error fetching MASI index from Casablanca Bourse:", e)
         return 0.0
+
 
 ##################################################
 #       Fetching Stocks & Instruments
