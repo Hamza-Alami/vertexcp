@@ -27,15 +27,12 @@ def performance_table():
 ##################################################
 #               MASI Fetch
 ##################################################
+import certifi
 
 def fetch_masi_from_cb():
-    """
-    Fetches JSON from Casablanca Bourse for 'Principaux indices'
-    and returns the current MASI index value as float.
-    """
     url = "https://www.casablanca-bourse.com/api/proxy/fr/api/bourse/dashboard/grouped_index_watch?"
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=10, verify=certifi.where())
         r.raise_for_status()
         data = r.json()
 
@@ -45,21 +42,13 @@ def fetch_masi_from_cb():
                 for item in block.get("items", []):
                     if (item.get("index") or "").strip().upper() == "MASI":
                         val_str = str(item.get("field_index_value", "0"))
-                        st.write("🔎 Raw MASI value from API:", repr(val_str))
-                        # Normalize value string for float conversion
                         val_str = val_str.replace(" ", "").replace(",", ".")
-                        try:
-                            return float(val_str)
-                        except ValueError:
-                            st.error(f"Failed to convert MASI value: {val_str}")
-                            return 0.0
-
-        st.warning("⚠️ MASI not found in API data:")
-        st.json(data)  # pretty-print JSON into Streamlit app
+                        return float(val_str)
         return 0.0
     except Exception as e:
         st.error(f"❌ Error fetching MASI index from Casablanca Bourse: {e}")
         return 0.0
+
 
 
 
