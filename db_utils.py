@@ -44,12 +44,17 @@ def fetch_masi_from_cb():
             if "principaux" in title and "indice" in title:
                 for item in block.get("items", []):
                     if (item.get("index") or "").strip().upper() == "MASI":
-                        val_str = item.get("field_index_value", "0")
+                        val_str = str(item.get("field_index_value", "0"))
+                        print("🔎 Raw MASI value from API:", repr(val_str))
+                        # Normalize value string
+                        val_str = val_str.replace(" ", "").replace(",", ".")
                         return float(val_str)
+        print("⚠️ MASI not found in API data:", data)
         return 0.0
     except Exception as e:
-        print("Error fetching MASI index from Casablanca Bourse:", e)
+        print("❌ Error fetching MASI index from Casablanca Bourse:", e)
         return 0.0
+
 
 
 ##################################################
