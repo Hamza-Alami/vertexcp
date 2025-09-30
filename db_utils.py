@@ -28,27 +28,42 @@ def performance_table():
 #               MASI Fetch
 ##################################################
 import certifi
+import urllib3
+import requests
+
+# Disable warnings if we need to fall back to verify=False
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def fetch_masi_from_cb():
+    """
+    Fetch MASI index from Casablanca Bourse API.
+    Tries with SSL verification first; if it fails, retries without verification.
+    """
     url = "https://www.casablanca-bourse.com/api/proxy/fr/api/bourse/dashboard/grouped_index_watch?"
-    try:
-        r = requests.get(url, timeout=10, verify=certifi.where())
-        r.raise_for_status()
-        data = r.json()
+    
+    for verify_mode in (certifi.where(), False):  # try secure first, then fallback
+        try:
+            r = requests.get(url, timeout=10, verify=verify_mode)
+            r.raise_for_status()
+            data = r.json()
 
-        for block in data.get("data", []):
-            title = (block.get("title") or "").strip().lower()
-            if "principaux" in title and "indice" in title:
-                for item in block.get("items", []):
-                    if (item.get("index") or "").strip().upper() == "MASI":
-                        val_str = str(item.get("field_index_value", "0"))
-                        val_str = val_str.replace(" ", "").replace(",", ".")
-                        return float(val_str)
-        return 0.0
-    except Exception as e:
-        st.error(f"❌ Error fetching MASI index from Casablanca Bourse: {e}")
-        return 0.0
+            for block in data.get("data", []):
+                title = (block.get("title") or "").strip().lower()
+                if "principaux" in title and "indice" in title:
+                    for item in block.get("items", []):
+                        if (item.get("index") or "").strip().upper() == "MASI":
+                            val_str = str(item.get("field_index_value", "0"))
+                            val_str = val_str.replace(" ", "").replace(",", ".")
+                            return float(val_str)
+            return 0.0
 
+        except Exception as e:
+            if verify_mode is False:
+                # Final failure after fallback
+                st.error(f"❌ Still cannot fetch MASI index: {e}")
+                return 0.0
+            # Retry without verification
+            continue
 
 
 ##################################################
