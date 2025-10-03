@@ -10,7 +10,9 @@ from pages import (
     page_inventory,
     page_market,
     page_performance_fees,
-    page_strategies_and_simulation
+    page_strategies_and_simulation,
+    page_reporting
+
 )
 
 def add_sidebar_logo():
@@ -31,7 +33,8 @@ def main():
             "Voir tout les portefeuilles",
             "Inventaire",
             "Marché",
-            "Performance & Fees"
+            "Performance & Fees",
+            "📊 Reporting"
         ]
     )
     if page == "Gestion des clients":
@@ -50,6 +53,8 @@ def main():
         page_performance_fees() 
     elif page == "Stratégies et Simulation":
         page_strategies_and_simulation()
+    elif page == "📊 Reporting":
+        page_reporting()
 
 if __name__ == "__main__":
     main()
