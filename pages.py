@@ -1136,3 +1136,95 @@ def page_strategies_and_simulation():
 # Expose the page function
 if __name__ == "__main__":
     page_strategies_and_simulation()
+
+import io
+import matplotlib.pyplot as plt
+import plotly.express as px
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
+
+def page_reporting():
+    st.title("📊 Rapport Client")
+
+    clients = get_all_clients()
+    if not clients:
+        st.warning("Aucun client trouvé.")
+        return
+
+    client_name = st.selectbox("Sélectionner un client", clients)
+    if not client_name:
+        return
+
+    # --- Portfolio Data
+    df_portfolio = get_portfolio(client_name)
+    if df_portfolio.empty:
+        st.warning("Ce client n’a pas de portefeuille.")
+        return
+
+    # --- Valorisation
+    total_val = df_portfolio["valorisation"].sum()
+    st.metric("Valeur Totale du Portefeuille", f"{total_val:,.2f} MAD")
+
+    # --- Donut Chart
+    fig_donut = px.pie(df_portfolio, names="valeur", values="valorisation", hole=0.5,
+                       title="Répartition du Portefeuille")
+    st.plotly_chart(fig_donut, use_container_width=True)
+
+    # --- Performance Line Chart
+    periods = get_performance_periods_for_client(get_client_id(client_name))
+    if not periods.empty:
+        start_val = float(periods.iloc[-1]["start_value"])
+        masi_start = float(periods.iloc[-1]["masi_start_value"])
+
+        cur_val = total_val
+        perf_port = ((cur_val - start_val) / start_val) * 100 if start_val else 0
+        masi_now = get_current_masi()
+        perf_masi = ((masi_now - masi_start) / masi_start) * 100 if masi_start else 0
+        surp = perf_port - perf_masi
+
+        st.write(f"**Performance Portefeuille:** {perf_port:.2f}%")
+        st.write(f"**Performance MASI:** {perf_masi:.2f}%")
+        st.write(f"**Surperformance:** {surp:.2f}%")
+
+        perf_df = pd.DataFrame({
+            "Date": [periods.iloc[-1]["start_date"], date.today()],
+            "Portefeuille": [0, perf_port],
+            "MASI": [0, perf_masi]
+        })
+        fig_line = px.line(perf_df, x="Date", y=["Portefeuille", "MASI"],
+                           title="Performance vs MASI")
+        st.plotly_chart(fig_line, use_container_width=True)
+
+    # --- PDF Export
+    if st.button("📄 Exporter en PDF"):
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        styles = getSampleStyleSheet()
+        story = []
+
+        story.append(Paragraph(f"Rapport Client: {client_name}", styles["Title"]))
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"Valeur Totale: {total_val:,.2f} MAD", styles["Normal"]))
+        story.append(Spacer(1, 12))
+
+        # Save donut chart as image for PDF
+        img_donut = "donut.png"
+        fig_donut.write_image(img_donut)
+        story.append(Image(img_donut, width=400, height=300))
+        story.append(Spacer(1, 12))
+
+        # Save line chart
+        img_line = "perf.png"
+        fig_line.write_image(img_line)
+        story.append(Image(img_line, width=400, height=300))
+
+        doc.build(story)
+        buffer.seek(0)
+        st.download_button(
+            "⬇️ Télécharger le PDF",
+            buffer,
+            file_name=f"Rapport_{client_name}.pdf",
+            mime="application/pdf"
+        )
+
