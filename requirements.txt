@@ -2,3 +2,6 @@ streamlit==1.42.0
 supabase==1.1.0
 pandas==2.2.0
 requests==2.31.0
+matplotlib==3.9.2
+plotly==5.23.0
+reportlab==4.2.2
