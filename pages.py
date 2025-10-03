@@ -1156,47 +1156,99 @@ def page_reporting():
     if not client_name:
         return
 
-    # --- Portfolio Data
-    df_portfolio = get_portfolio(client_name)
-    if df_portfolio.empty:
-        st.warning("Ce client n’a pas de portefeuille.")
+    # ---------------------------------------------------
+    # Portfolio: reuse existing logic
+    # ---------------------------------------------------
+    st.subheader("Portefeuille du Client")
+    show_portfolio(client_name, read_only=True)   # ✅ reuse same function
+
+    # We also need total value for charts
+    pdf = get_portfolio(client_name)
+    if pdf.empty:
+        st.warning("Pas de portefeuille pour ce client.")
         return
+    total_val = pdf["valorisation"].sum()
 
-    # --- Valorisation
-    total_val = df_portfolio["valorisation"].sum()
-    st.metric("Valeur Totale du Portefeuille", f"{total_val:,.2f} MAD")
-
-    # --- Donut Chart
-    fig_donut = px.pie(df_portfolio, names="valeur", values="valorisation", hole=0.5,
+    # Donut chart of allocation
+    fig_donut = px.pie(pdf, names="valeur", values="valorisation", hole=0.5,
                        title="Répartition du Portefeuille")
     st.plotly_chart(fig_donut, use_container_width=True)
 
-    # --- Performance Line Chart
-    periods = get_performance_periods_for_client(get_client_id(client_name))
-    if not periods.empty:
-        start_val = float(periods.iloc[-1]["start_value"])
-        masi_start = float(periods.iloc[-1]["masi_start_value"])
+    # ---------------------------------------------------
+    # Performance: reuse same logic as performance_fees
+    # ---------------------------------------------------
+    st.subheader("Performance & Surperformance")
 
-        cur_val = total_val
-        perf_port = ((cur_val - start_val) / start_val) * 100 if start_val else 0
-        masi_now = get_current_masi()
-        perf_masi = ((masi_now - masi_start) / masi_start) * 100 if masi_start else 0
-        surp = perf_port - perf_masi
+    cid = get_client_id(client_name)
+    df_periods = get_performance_periods_for_client(cid)
+    if df_periods.empty:
+        st.info("Aucune période de performance enregistrée.")
+        return
 
-        st.write(f"**Performance Portefeuille:** {perf_port:.2f}%")
-        st.write(f"**Performance MASI:** {perf_masi:.2f}%")
-        st.write(f"**Surperformance:** {surp:.2f}%")
+    # Pick the latest start_date
+    df_periods = df_periods.copy()
+    df_periods["start_date"] = pd.to_datetime(df_periods["start_date"], errors="coerce").dt.date
+    row_chosen = df_periods.sort_values("start_date", ascending=False).iloc[0]
 
-        perf_df = pd.DataFrame({
-            "Date": [periods.iloc[-1]["start_date"], date.today()],
-            "Portefeuille": [0, perf_port],
-            "MASI": [0, perf_masi]
-        })
-        fig_line = px.line(perf_df, x="Date", y=["Portefeuille", "MASI"],
-                           title="Performance vs MASI")
-        st.plotly_chart(fig_line, use_container_width=True)
+    portfolio_start = float(row_chosen.get("start_value", 0))
+    masi_start = float(row_chosen.get("masi_start_value", 0))
 
-    # --- PDF Export
+    # Current portfolio value
+    stx = db_utils.fetch_stocks()
+    cur_val = 0.0
+    for _, prow in pdf.iterrows():
+        val = str(prow["valeur"])
+        qty_ = float(prow["quantité"])
+        matchp = stx[stx["valeur"] == val]
+        px_ = float(matchp["cours"].values[0]) if not matchp.empty else 0.0
+        cur_val += (qty_ * px_)
+
+    gains_port = cur_val - portfolio_start
+    perf_port = (gains_port / portfolio_start) * 100 if portfolio_start > 0 else 0
+
+    masi_now = get_current_masi()
+    gains_masi = masi_now - masi_start
+    perf_masi = (gains_masi / masi_start) * 100 if masi_start > 0 else 0
+
+    surp_pct = perf_port - perf_masi
+    surp_abs = (surp_pct / 100.0) * portfolio_start
+
+    cinfo = get_client_info(client_name)
+    mgmt_rate = float(cinfo.get("management_fee_rate", 0)) / 100.0
+    if cinfo.get("bill_surperformance", False):
+        base_ = max(0, surp_abs)
+    else:
+        base_ = max(0, gains_port)
+    fees_ = base_ * mgmt_rate
+
+    results_df = pd.DataFrame([{
+        "Portf Départ": portfolio_start,
+        "Portf Actuel": cur_val,
+        "Gains Portf": gains_port,
+        "Perf Portf %": perf_port,
+        "MASI Départ": masi_start,
+        "MASI Actuel": masi_now,
+        "Gains MASI": gains_masi,
+        "Perf MASI %": perf_masi,
+        "Surperf %": surp_pct,
+        "Surperf Abs.": surp_abs,
+        "Frais": fees_,
+    }])
+    st.dataframe(results_df.style.format("{:,.2f}"), use_container_width=True)
+
+    # Line chart
+    perf_df = pd.DataFrame({
+        "Date": [row_chosen["start_date"], date.today()],
+        "Portefeuille": [0, perf_port],
+        "MASI": [0, perf_masi]
+    })
+    fig_line = px.line(perf_df, x="Date", y=["Portefeuille", "MASI"],
+                       title="Performance vs MASI")
+    st.plotly_chart(fig_line, use_container_width=True)
+
+    # ---------------------------------------------------
+    # Export PDF
+    # ---------------------------------------------------
     if st.button("📄 Exporter en PDF"):
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4)
@@ -1208,13 +1260,11 @@ def page_reporting():
         story.append(Paragraph(f"Valeur Totale: {total_val:,.2f} MAD", styles["Normal"]))
         story.append(Spacer(1, 12))
 
-        # Save donut chart as image for PDF
         img_donut = "donut.png"
         fig_donut.write_image(img_donut)
         story.append(Image(img_donut, width=400, height=300))
         story.append(Spacer(1, 12))
 
-        # Save line chart
         img_line = "perf.png"
         fig_line.write_image(img_line)
         story.append(Image(img_line, width=400, height=300))
