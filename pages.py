@@ -1144,6 +1144,15 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import A4
 
+import io
+import plotly.express as px
+import matplotlib.pyplot as plt
+from datetime import date
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+
 def page_reporting():
     st.title("📊 Rapport Client")
 
@@ -1157,25 +1166,25 @@ def page_reporting():
         return
 
     # ---------------------------------------------------
-    # Portfolio: reuse existing logic
+    # Portfolio section
     # ---------------------------------------------------
     st.subheader("Portefeuille du Client")
-    show_portfolio(client_name, read_only=True)   # ✅ reuse same function
+    show_portfolio(client_name, read_only=True)   # ✅ reuse logic
 
-    # We also need total value for charts
-    pdf = get_portfolio(client_name)
-    if pdf.empty:
+    df_portfolio = get_portfolio(client_name)
+    if df_portfolio.empty:
         st.warning("Pas de portefeuille pour ce client.")
         return
-    total_val = pdf["valorisation"].sum()
 
-    # Donut chart of allocation
-    fig_donut = px.pie(pdf, names="valeur", values="valorisation", hole=0.5,
-                       title="Répartition du Portefeuille")
+    total_val = df_portfolio["valorisation"].sum()
+
+    # Donut chart using column poids
+    fig_donut = px.pie(df_portfolio, names="valeur", values="poids", hole=0.5,
+                       title="Répartition du Portefeuille (%)")
     st.plotly_chart(fig_donut, use_container_width=True)
 
     # ---------------------------------------------------
-    # Performance: reuse same logic as performance_fees
+    # Performance section
     # ---------------------------------------------------
     st.subheader("Performance & Surperformance")
 
@@ -1185,7 +1194,7 @@ def page_reporting():
         st.info("Aucune période de performance enregistrée.")
         return
 
-    # Pick the latest start_date
+    # latest period
     df_periods = df_periods.copy()
     df_periods["start_date"] = pd.to_datetime(df_periods["start_date"], errors="coerce").dt.date
     row_chosen = df_periods.sort_values("start_date", ascending=False).iloc[0]
@@ -1193,10 +1202,10 @@ def page_reporting():
     portfolio_start = float(row_chosen.get("start_value", 0))
     masi_start = float(row_chosen.get("masi_start_value", 0))
 
-    # Current portfolio value
+    # Current portfolio valuation
     stx = db_utils.fetch_stocks()
     cur_val = 0.0
-    for _, prow in pdf.iterrows():
+    for _, prow in df_portfolio.iterrows():
         val = str(prow["valeur"])
         qty_ = float(prow["quantité"])
         matchp = stx[stx["valeur"] == val]
@@ -1231,8 +1240,7 @@ def page_reporting():
         "Gains MASI": gains_masi,
         "Perf MASI %": perf_masi,
         "Surperf %": surp_pct,
-        "Surperf Abs.": surp_abs,
-        "Frais": fees_,
+        "Surperf Abs.": surp_abs
     }])
     st.dataframe(results_df.style.format("{:,.2f}"), use_container_width=True)
 
@@ -1255,19 +1263,67 @@ def page_reporting():
         styles = getSampleStyleSheet()
         story = []
 
-        story.append(Paragraph(f"Rapport Client: {client_name}", styles["Title"]))
+        # --- Logo + Header ---
+        try:
+            logo_path = "logo.png"  # update to your sidebar logo path
+            story.append(Image(logo_path, width=120, height=60))
+        except Exception:
+            pass
         story.append(Spacer(1, 12))
+        story.append(Paragraph(f"Rapport Client: {client_name}", styles["Title"]))
+        story.append(Spacer(1, 24))
+
+        # --- Portfolio section ---
+        story.append(Paragraph("📌 Portefeuille", styles["Heading2"]))
         story.append(Paragraph(f"Valeur Totale: {total_val:,.2f} MAD", styles["Normal"]))
         story.append(Spacer(1, 12))
 
+        # Save donut chart
         img_donut = "donut.png"
         fig_donut.write_image(img_donut)
-        story.append(Image(img_donut, width=400, height=300))
+        story.append(Image(img_donut, width=300, height=250))
         story.append(Spacer(1, 12))
 
+        # Portfolio table simplified
+        cols = ["valeur", "quantité", "vwap", "cours", "valorisation", "poids"]
+        table_data = [cols] + df_portfolio[cols].round(2).astype(str).values.tolist()
+        t = Table(table_data, hAlign="LEFT")
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#003366")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 24))
+
+        # --- Performance section ---
+        story.append(Paragraph("📌 Performance & Surperformance", styles["Heading2"]))
+        story.append(Spacer(1, 12))
+
+        # Save line chart
         img_line = "perf.png"
         fig_line.write_image(img_line)
-        story.append(Image(img_line, width=400, height=300))
+        story.append(Image(img_line, width=300, height=200))
+        story.append(Spacer(1, 12))
+
+        # Performance table (no frais)
+        perf_cols = list(results_df.columns)
+        table_perf = [perf_cols] + results_df.round(2).astype(str).values.tolist()
+        t2 = Table(table_perf, hAlign="LEFT")
+        t2.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#660000")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+        ]))
+        story.append(t2)
 
         doc.build(story)
         buffer.seek(0)
@@ -1277,4 +1333,5 @@ def page_reporting():
             file_name=f"Rapport_{client_name}.pdf",
             mime="application/pdf"
         )
+
 
