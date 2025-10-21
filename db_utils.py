@@ -100,7 +100,7 @@ def fetch_stocks():
 
     override_real_name = "ARADEI CAPITAL"
     custom_name = "VICENNE"
-    custom_price = 471
+    custom_price = 482
 
     mask = df["valeur"] == override_real_name
     if mask.any():
