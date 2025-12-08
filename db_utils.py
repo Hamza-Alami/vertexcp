@@ -92,26 +92,8 @@ def _cached_fetch_stocks():
         return pd.DataFrame(columns=["valeur", "cours"])
 
 def fetch_stocks():
-    """
-    Return the 'stocks' DataFrame from the IDBourse API, cached for 60s.
-    Override: Replace 'ARADEI CAPITAL' with 'VICENNE' and force cours=440.
-    """
-    df = _cached_fetch_stocks().copy()
-
-    #override_real_name = "ARADEI CAPITAL"
-    #custom_name = "VICENNE"
-    #custom_price = 475
-
-    mask = df["valeur"] == df["valeur"]  #"override_real_name"
-    if mask.any():
-        df.loc[mask, "valeur"] = custom_name
-        df.loc[mask, "cours"] = custom_price
-    else:
-        # In case ARADEI CAPITAL is missing from API, just add VICENNE
-        new_row = pd.DataFrame([{"valeur": custom_name, "cours": custom_price}])
-        df = pd.concat([df, new_row], ignore_index=True)
-
-    return df
+    """Return the 'stocks' DataFrame from the IDBourse API, cached for 60s."""
+    return _cached_fetch_stocks()
 
 def fetch_instruments():
     """
