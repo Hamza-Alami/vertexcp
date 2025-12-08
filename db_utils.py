@@ -104,7 +104,7 @@ def fetch_stocks():
     custom_price = 475
     """
 
-    mask = df["valeur"] == df["valeur"] #"override_real_name"
+    mask = df["valeur"] == df["valeur"]  #"override_real_name"
     if mask.any():
         df.loc[mask, "valeur"] = custom_name
         df.loc[mask, "cours"] = custom_price
