@@ -98,11 +98,11 @@ def fetch_stocks():
     """
     df = _cached_fetch_stocks().copy()
 
-    override_real_name = "ARADEI CAPITAL"
+    """override_real_name = "ARADEI CAPITAL"
     custom_name = "VICENNE"
-    custom_price = 475
+    custom_price = 475"""
 
-    mask = df["valeur"] == override_real_name
+    mask = df["valeur"] == df["valeur"] """override_real_name"""
     if mask.any():
         df.loc[mask, "valeur"] = custom_name
         df.loc[mask, "cours"] = custom_price
