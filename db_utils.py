@@ -1,6 +1,8 @@
 import pandas as pd
 import streamlit as st
 import requests
+import certifi
+from bs4 import BeautifulSoup
 from db_connection import get_supabase_client
 from datetime import date, datetime
 
@@ -71,28 +73,89 @@ def fetch_masi_from_cb():
 ##################################################
 
 @st.cache_data(ttl=60)
-def _cached_fetch_stocks():
-    """
-    Actually fetch from IDBourse API, returning a DataFrame with columns: [valeur, cours].
-    Adds a 'Cash' row with cours=1.
-    """
+CB_MARKET_URL = "https://www.casablanca-bourse.com/fr/live-market/marche-actions-groupement"
+
+def _parse_float_fr(x: str) -> float:
+    if x is None:
+        return 0.0
+    s = str(x).strip()
+    if s in ("", "-", "—"):
+        return 0.0
+    s = s.replace("\xa0", " ").replace(" ", "").replace(",", ".")
     try:
-        response = requests.get("https://backend.idbourse.com/api_2/get_all_data", timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        df = pd.DataFrame(
-            [(s.get("name", "N/A"), s.get("dernier_cours", 0)) for s in data],
-            columns=["valeur", "cours"]
-        )
-        # Add CASH row
-        cash_row = pd.DataFrame([{"valeur": "Cash", "cours": 1}])
-        return pd.concat([df, cash_row], ignore_index=True)
-    except Exception as e:
-        st.error(f"Failed to fetch stock data from IDBourse: {e}")
+        return float(s)
+    except ValueError:
+        return 0.0
+
+def _scrape_cb_prices() -> pd.DataFrame:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Streamlit; IDBourse) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
+    }
+
+    r = requests.get(
+        CB_MARKET_URL,
+        timeout=20,
+        headers=headers,
+        verify=certifi.where(),   # avoid verify=False in cloud
+    )
+    r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, "lxml")
+    tables = soup.find_all("table")
+
+    rows = []
+    for table in tables:
+        thead = table.find("thead")
+        tbody = table.find("tbody")
+        if not tbody:
+            continue
+
+        # Build header -> index map (robust to column order)
+        header_cells = []
+        if thead:
+            header_cells = [th.get_text(" ", strip=True).lower() for th in thead.find_all("th")]
+
+        # Find best “last price” column
+        last_price_idx = None
+        for i, h in enumerate(header_cells):
+            if ("dernier" in h and "cours" in h) or (h.strip() == "dernier"):
+                last_price_idx = i
+                break
+
+        for tr in tbody.find_all("tr"):
+            tds = tr.find_all("td")
+            if not tds:
+                continue
+
+            name = tds[0].get_text(" ", strip=True)
+            if not name:
+                continue
+
+            # fallback to classic Casablanca Bourse layout (your script uses cols[4] as last price)
+            if last_price_idx is not None and last_price_idx < len(tds):
+                last_price_txt = tds[last_price_idx].get_text(" ", strip=True)
+            else:
+                last_price_txt = tds[4].get_text(" ", strip=True) if len(tds) > 4 else "0"
+
+            rows.append({"valeur": name, "cours": _parse_float_fr(last_price_txt)})
+
+    df = pd.DataFrame(rows).drop_duplicates(subset=["valeur"], keep="last")
+    if df.empty:
         return pd.DataFrame(columns=["valeur", "cours"])
 
-def fetch_stocks():
-    """Return the 'stocks' DataFrame from the IDBourse API, cached for 60s."""
+    # Always include Cash
+    df = pd.concat([df, pd.DataFrame([{"valeur": "Cash", "cours": 1.0}])], ignore_index=True)
+    return df[["valeur", "cours"]]
+
+@st.cache_data(ttl=60)
+def _cached_fetch_stocks() -> pd.DataFrame:
+    try:
+        return _scrape_cb_prices()
+    except Exception as e:
+        st.error(f"Failed to scrape Casablanca Bourse prices: {e}")
+        return pd.DataFrame(columns=["valeur", "cours"])
+
+def fetch_stocks() -> pd.DataFrame:
     return _cached_fetch_stocks()
 
 def fetch_instruments():
