@@ -2,9 +2,11 @@ import pandas as pd
 import streamlit as st
 import requests
 import certifi
+import urllib3
 from bs4 import BeautifulSoup
 from db_connection import get_supabase_client
 from datetime import date, datetime
+from typing import Optional
 
 ##################################################
 #            Supabase Client & Helpers
@@ -26,24 +28,25 @@ def performance_table():
     """Shortcut to the 'performance_periods' table."""
     return get_supabase().table("performance_periods")
 
+def prices_table():
+    """Shortcut to the 'market_prices' table (valeur, cours, updated_at)."""
+    return get_supabase().table("market_prices")
+
 ##################################################
 #               MASI Fetch
 ##################################################
-import certifi
-import urllib3
-import requests
 
 # Disable warnings if we need to fall back to verify=False
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def fetch_masi_from_cb():
+def fetch_masi_from_cb() -> float:
     """
     Fetch MASI index from Casablanca Bourse API.
     Tries with SSL verification first; if it fails, retries without verification.
     """
     url = "https://www.casablanca-bourse.com/api/proxy/fr/api/bourse/dashboard/grouped_index_watch?"
-    
-    for verify_mode in (certifi.where(), False):  # try secure first, then fallback
+
+    for verify_mode in (certifi.where(), False):  # secure first, then fallback
         try:
             r = requests.get(url, timeout=10, verify=verify_mode)
             r.raise_for_status()
@@ -56,24 +59,28 @@ def fetch_masi_from_cb():
                         if (item.get("index") or "").strip().upper() == "MASI":
                             val_str = str(item.get("field_index_value", "0"))
                             val_str = val_str.replace(" ", "").replace(",", ".")
-                            return float(val_str)
+                            try:
+                                return float(val_str)
+                            except ValueError:
+                                return 0.0
             return 0.0
 
         except Exception as e:
             if verify_mode is False:
-                # Final failure after fallback
                 st.error(f"❌ Still cannot fetch MASI index: {e}")
                 return 0.0
-            # Retry without verification
             continue
 
-
 ##################################################
-#       Fetching Stocks & Instruments
+#       Fetching Stocks (Scrape + Supabase Cache)
 ##################################################
 
-@st.cache_data(ttl=60)
 CB_MARKET_URL = "https://www.casablanca-bourse.com/fr/live-market/marche-actions-groupement"
+
+# Freshness logic:
+# - Streamlit cache: 60s
+# - Supabase cached prices considered fresh for: 180s
+SUPABASE_PRICES_MAX_AGE_SECONDS = 180
 
 def _parse_float_fr(x: str) -> float:
     if x is None:
@@ -88,34 +95,50 @@ def _parse_float_fr(x: str) -> float:
         return 0.0
 
 def _scrape_cb_prices() -> pd.DataFrame:
+    """
+    Scrape Casablanca Bourse Live Market page and return DataFrame: [valeur, cours]
+    Always appends Cash (cours=1.0)
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Streamlit; IDBourse) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
     }
 
-    r = requests.get(
-        CB_MARKET_URL,
-        timeout=20,
-        headers=headers,
-        verify=certifi.where(),   # avoid verify=False in cloud
-    )
-    r.raise_for_status()
+    # Try SSL verified first, then fallback
+    last_err: Optional[Exception] = None
+    for verify_mode in (certifi.where(), False):
+        try:
+            r = requests.get(
+                CB_MARKET_URL,
+                timeout=20,
+                headers=headers,
+                verify=verify_mode,
+            )
+            r.raise_for_status()
+            html = r.text
+            break
+        except Exception as e:
+            last_err = e
+            if verify_mode is False:
+                raise
+            continue
+    else:
+        raise last_err or RuntimeError("Unknown scraping error")
 
-    soup = BeautifulSoup(r.text, "lxml")
+    soup = BeautifulSoup(html, "lxml")
     tables = soup.find_all("table")
 
     rows = []
     for table in tables:
-        thead = table.find("thead")
         tbody = table.find("tbody")
         if not tbody:
             continue
 
-        # Build header -> index map (robust to column order)
+        thead = table.find("thead")
         header_cells = []
         if thead:
             header_cells = [th.get_text(" ", strip=True).lower() for th in thead.find_all("th")]
 
-        # Find best “last price” column
+        # Locate "Dernier cours" column if present
         last_price_idx = None
         for i, h in enumerate(header_cells):
             if ("dernier" in h and "cours" in h) or (h.strip() == "dernier"):
@@ -131,31 +154,115 @@ def _scrape_cb_prices() -> pd.DataFrame:
             if not name:
                 continue
 
-            # fallback to classic Casablanca Bourse layout (your script uses cols[4] as last price)
             if last_price_idx is not None and last_price_idx < len(tds):
                 last_price_txt = tds[last_price_idx].get_text(" ", strip=True)
             else:
+                # Fallback to common layout (index 4)
                 last_price_txt = tds[4].get_text(" ", strip=True) if len(tds) > 4 else "0"
 
-            rows.append({"valeur": name, "cours": _parse_float_fr(last_price_txt)})
+            price = _parse_float_fr(last_price_txt)
+            rows.append({"valeur": name, "cours": price})
 
     df = pd.DataFrame(rows).drop_duplicates(subset=["valeur"], keep="last")
     if df.empty:
-        return pd.DataFrame(columns=["valeur", "cours"])
+        df = pd.DataFrame(columns=["valeur", "cours"])
 
     # Always include Cash
     df = pd.concat([df, pd.DataFrame([{"valeur": "Cash", "cours": 1.0}])], ignore_index=True)
     return df[["valeur", "cours"]]
 
+def _read_prices_from_supabase(max_age_seconds: int = SUPABASE_PRICES_MAX_AGE_SECONDS) -> pd.DataFrame:
+    """
+    Read cached market prices from Supabase table market_prices.
+    Returns empty DF if:
+      - table is empty
+      - updated_at is too old
+      - any error occurs
+    """
+    try:
+        res = prices_table().select("*").execute()
+        if not res.data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(res.data)
+        if df.empty or "updated_at" not in df.columns or "valeur" not in df.columns or "cours" not in df.columns:
+            return pd.DataFrame()
+
+        df["updated_at"] = pd.to_datetime(df["updated_at"], errors="coerce", utc=True)
+        newest = df["updated_at"].max()
+        if pd.isna(newest):
+            return pd.DataFrame()
+
+        now_utc = pd.Timestamp.utcnow().tz_localize("UTC")
+        age = (now_utc - newest).total_seconds()
+        if age > max_age_seconds:
+            return pd.DataFrame()
+
+        # Convert cours to float safely
+        df["cours"] = df["cours"].apply(lambda x: float(x) if x is not None else 0.0)
+
+        out = df[["valeur", "cours"]].copy()
+
+        # Always include Cash
+        out = pd.concat([out, pd.DataFrame([{"valeur": "Cash", "cours": 1.0}])], ignore_index=True)
+        return out
+
+    except Exception:
+        return pd.DataFrame()
+
+def _upsert_prices_to_supabase(df: pd.DataFrame) -> None:
+    """
+    Upsert prices into market_prices (excluding Cash).
+    """
+    if df is None or df.empty:
+        return
+
+    try:
+        now = datetime.utcnow().isoformat()
+        payload = []
+        for _, r in df.iterrows():
+            val = str(r.get("valeur", "")).strip()
+            if not val or val.lower() == "cash":
+                continue
+            cours = r.get("cours", 0.0)
+            try:
+                cours_f = float(cours)
+            except Exception:
+                cours_f = 0.0
+            payload.append({"valeur": val, "cours": cours_f, "updated_at": now})
+
+        if payload:
+            prices_table().upsert(payload, on_conflict="valeur").execute()
+    except Exception:
+        # Silent fail: app should still work even if DB write fails
+        pass
+
 @st.cache_data(ttl=60)
 def _cached_fetch_stocks() -> pd.DataFrame:
+    """
+    Main entry:
+      1) Try fresh cached prices from Supabase (market_prices)
+      2) Else scrape Casablanca Bourse
+      3) Save to Supabase (best-effort)
+    """
+    df_db = _read_prices_from_supabase(max_age_seconds=SUPABASE_PRICES_MAX_AGE_SECONDS)
+    if not df_db.empty:
+        return df_db
+
     try:
-        return _scrape_cb_prices()
+        df = _scrape_cb_prices()
+        _upsert_prices_to_supabase(df)
+        return df
     except Exception as e:
         st.error(f"Failed to scrape Casablanca Bourse prices: {e}")
+        # Last fallback: try whatever is in Supabase even if stale (better than nothing)
+        df_db_any = _read_prices_from_supabase(max_age_seconds=10**9)
+        if not df_db_any.empty:
+            return df_db_any
         return pd.DataFrame(columns=["valeur", "cours"])
 
 def fetch_stocks() -> pd.DataFrame:
+    """Return the live/cached stocks DataFrame with columns [valeur, cours] + Cash row."""
     return _cached_fetch_stocks()
 
 def fetch_instruments():
@@ -166,9 +273,9 @@ def fetch_instruments():
     client = get_supabase()
     res = client.table("instruments").select("*").execute()
     if not res.data:
-        return pd.DataFrame(columns=["instrument_name","nombre_de_titres","facteur_flottant"])
+        return pd.DataFrame(columns=["instrument_name", "nombre_de_titres", "facteur_flottant"])
     df = pd.DataFrame(res.data)
-    needed_cols = ["instrument_name","nombre_de_titres","facteur_flottant"]
+    needed_cols = ["instrument_name", "nombre_de_titres", "facteur_flottant"]
     for col in needed_cols:
         if col not in df.columns:
             df[col] = None
@@ -211,7 +318,6 @@ def get_portfolio(client_name: str) -> pd.DataFrame:
     res = portfolio_table().select("*").eq("client_id", cid).execute()
     return pd.DataFrame(res.data)
 
-
 ##################################################
 #        CRUD for Clients & Rates
 ##################################################
@@ -251,11 +357,11 @@ def delete_client(cname: str):
     except Exception as e:
         st.error(f"Erreur lors de la suppression du client: {e}")
 
-def update_client_rates(client_name: str, 
-                        exchange_comm: float, 
-                        is_pea: bool, 
-                        custom_tax: float, 
-                        mgmt_fee: float, 
+def update_client_rates(client_name: str,
+                        exchange_comm: float,
+                        is_pea: bool,
+                        custom_tax: float,
+                        mgmt_fee: float,
                         bill_surperf: bool):
     cid = get_client_id(client_name)
     if cid is None:
@@ -313,10 +419,11 @@ def get_latest_performance_period_for_all_clients() -> pd.DataFrame:
     return df_latest
 
 def update_performance_period_rows(old_df: pd.DataFrame, new_df: pd.DataFrame):
-    for idx, row in new_df.iterrows():
+    for _, row in new_df.iterrows():
         rec_id = row.get("id", None)
         if rec_id is None:
             continue
+
         start_dt = row.get("start_date")
         if isinstance(start_dt, date):
             start_dt_str = start_dt.isoformat()
@@ -324,8 +431,10 @@ def update_performance_period_rows(old_df: pd.DataFrame, new_df: pd.DataFrame):
             start_dt_str = start_dt.date().isoformat()
         else:
             start_dt_str = str(start_dt)
+
         new_start_val = float(row.get("start_value", 0))
         new_masi_val = float(row.get("masi_start_value", 0))
+
         try:
             performance_table().update({
                 "start_date": start_dt_str,
