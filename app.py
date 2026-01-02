@@ -11,7 +11,6 @@ from pages import (
     page_market,
     page_performance_fees,
     page_strategies_and_simulation,
-    page_transactions,
     page_reporting
 
 )
@@ -35,7 +34,6 @@ def main():
             "Inventaire",
             "Marché",
             "Performance & Fees",
-            "📋 Transactions",
             "📊 Reporting"
         ]
     )
@@ -55,8 +53,6 @@ def main():
         page_performance_fees() 
     elif page == "Stratégies et Simulation":
         page_strategies_and_simulation()
-    elif page == "📋 Transactions":
-        page_transactions()
     elif page == "📊 Reporting":
         page_reporting()
 
