@@ -1194,3 +1194,261 @@ def page_reporting():
             file_name=f"Rapport_{client_name}.pdf",
             mime="application/pdf",
         )
+        # =========================================================
+# REPORTING (PDF)
+# =========================================================
+import io
+import os
+import tempfile
+import matplotlib.pyplot as plt
+
+from datetime import date
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+
+def _matplotlib_donut(df, outpath):
+    fig, ax = plt.subplots(figsize=(6, 4))
+    labels = df["valeur"].astype(str).tolist()
+    sizes = df["poids"].astype(float).tolist()
+    ax.pie(sizes, labels=None)
+    centre_circle = plt.Circle((0,0), 0.70, fc="white")
+    fig.gca().add_artist(centre_circle)
+    ax.axis("equal")
+    ax.legend(labels, loc="center left", bbox_to_anchor=(1, 0.5), fontsize=8)
+    plt.tight_layout()
+    fig.savefig(outpath, dpi=160)
+    plt.close(fig)
+
+def _matplotlib_line(dates, portf, masi, outpath):
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.plot(dates, portf, marker="o")
+    ax.plot(dates, masi, marker="o")
+    ax.legend(["Portefeuille (%)", "MASI (%)"])
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Performance")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    fig.savefig(outpath, dpi=160)
+    plt.close(fig)
+
+def page_reporting():
+    st.title("📊 Rapport Client (PDF)")
+
+    clients = get_all_clients()
+    if not clients:
+        st.warning("Aucun client trouvé.")
+        return
+
+    client_name = st.selectbox("Sélectionner un client", clients)
+    if not client_name:
+        return
+
+    st.subheader("Portefeuille du Client")
+    show_portfolio(client_name, read_only=True)
+
+    df_portfolio = get_portfolio(client_name)
+    if df_portfolio.empty:
+        st.warning("Pas de portefeuille pour ce client.")
+        return
+
+    # rebuild portfolio with live prices + weights for PDF
+    stx = fetch_stocks()
+    dfp = df_portfolio.copy()
+    dfp["cours"] = 0.0
+    dfp["valorisation"] = 0.0
+
+    for i, r in dfp.iterrows():
+        val = str(r["valeur"])
+        qty = float(r["quantité"] or 0)
+        px = 1.0 if val.lower() == "cash" else (
+            float(stx.loc[stx["valeur"] == val, "cours"].iloc[0]) if not stx[stx["valeur"] == val].empty else 0.0
+        )
+        dfp.at[i, "cours"] = px
+        dfp.at[i, "valorisation"] = qty * px
+
+    total_val = float(dfp["valorisation"].sum() or 0.0)
+    dfp["poids"] = (dfp["valorisation"] / total_val * 100.0) if total_val > 0 else 0.0
+
+    st.write(f"**Valorisation totale :** {total_val:,.2f} MAD")
+
+    cid = get_client_id(client_name)
+    df_periods = get_performance_periods_for_client(cid)
+    if df_periods.empty:
+        st.info("Aucune période de performance enregistrée (Performance & Frais).")
+        return
+
+    df_periods = df_periods.copy()
+    df_periods["start_date"] = pd.to_datetime(df_periods["start_date"], errors="coerce").dt.date
+    row_chosen = df_periods.sort_values("start_date", ascending=False).iloc[0]
+
+    portfolio_start = float(row_chosen.get("start_value", 0) or 0)
+    masi_start = float(row_chosen.get("masi_start_value", 0) or 0)
+
+    cur_val = total_val
+    gains_port = cur_val - portfolio_start
+    perf_port = (gains_port / portfolio_start) * 100 if portfolio_start > 0 else 0.0
+
+    masi_now = get_current_masi()
+    gains_masi = masi_now - masi_start
+    perf_masi = (gains_masi / masi_start) * 100 if masi_start > 0 else 0.0
+
+    surp_pct = perf_port - perf_masi
+    surp_abs = (surp_pct / 100.0) * portfolio_start
+
+    results_df = pd.DataFrame([{
+        "Portf Départ": portfolio_start,
+        "Portf Actuel": cur_val,
+        "Perf Portf %": perf_port,
+        "MASI Départ": masi_start,
+        "MASI Actuel": masi_now,
+        "Perf MASI %": perf_masi,
+        "Surperf %": surp_pct,
+        "Surperf Abs.": surp_abs,
+    }])
+    st.dataframe(results_df.style.format("{:,.2f}"), use_container_width=True)
+
+    if st.button("📄 Générer PDF"):
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # logo
+        try:
+            story.append(RLImage("logo.png", width=120, height=60))
+        except Exception:
+            pass
+
+        story.append(Spacer(1, 10))
+        story.append(Paragraph(f"Rapport Client : {client_name}", styles["Title"]))
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"Valeur Totale : {total_val:,.2f} MAD", styles["Normal"]))
+        story.append(Spacer(1, 12))
+
+        with tempfile.TemporaryDirectory() as tmpd:
+            donut_path = os.path.join(tmpd, "donut.png")
+            line_path = os.path.join(tmpd, "line.png")
+
+            # donut
+            _matplotlib_donut(dfp[["valeur","poids"]].copy(), donut_path)
+            story.append(RLImage(donut_path, width=380, height=250))
+            story.append(Spacer(1, 10))
+
+            # table portefeuille
+            cols = ["valeur", "quantité", "cours", "valorisation", "poids"]
+            tab_df = dfp[cols].copy()
+            tab_df["quantité"] = tab_df["quantité"].apply(lambda x: f"{float(x or 0):,.0f}")
+            tab_df["cours"] = tab_df["cours"].apply(lambda x: f"{float(x or 0):,.2f}")
+            tab_df["valorisation"] = tab_df["valorisation"].apply(lambda x: f"{float(x or 0):,.2f}")
+            tab_df["poids"] = tab_df["poids"].apply(lambda x: f"{float(x or 0):,.2f}")
+
+            table_data = [cols] + tab_df.values.tolist()
+            t = Table(table_data, hAlign="LEFT")
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#003366")),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 8),
+                ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+            ]))
+            story.append(t)
+            story.append(Spacer(1, 12))
+
+            # line chart
+            _matplotlib_line(
+                [row_chosen["start_date"], date.today()],
+                [0, perf_port],
+                [0, perf_masi],
+                line_path
+            )
+            story.append(RLImage(line_path, width=380, height=220))
+            story.append(Spacer(1, 12))
+
+            perf_cols = list(results_df.columns)
+            perf_tab = [perf_cols] + results_df.round(2).astype(str).values.tolist()
+            t2 = Table(perf_tab, hAlign="LEFT")
+            t2.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#660000")),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 8),
+                ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+            ]))
+            story.append(t2)
+
+        doc.build(story)
+        buffer.seek(0)
+
+        st.download_button(
+            "⬇️ Télécharger le PDF",
+            buffer,
+            file_name=f"Rapport_{client_name}.pdf",
+            mime="application/pdf",
+        )
+
+# =========================================================
+# TRANSACTIONS HISTORY + TPCVM (requires table `transactions`)
+# =========================================================
+def _transactions_table():
+    return get_supabase().table("transactions")
+
+def page_transactions_history():
+    st.title("📜 Historique des Transactions")
+
+    clients = get_all_clients()
+    if not clients:
+        st.warning("Aucun client.")
+        return
+
+    client_name = st.selectbox("Client", clients, key="tx_client")
+    cid = get_client_id(client_name)
+    if cid is None:
+        st.warning("Client introuvable.")
+        return
+
+    try:
+        res = _transactions_table().select("*").eq("client_id", cid).order("created_at", desc=True).limit(500).execute()
+        rows = res.data or []
+    except Exception as e:
+        st.error("Table `transactions` inexistante (ou accès refusé). Crée-la avec le SQL fourni.")
+        st.code(str(e))
+        return
+
+    if not rows:
+        st.info("Aucune transaction enregistrée.")
+        return
+
+    df = pd.DataFrame(rows)
+    st.dataframe(df, use_container_width=True)
+
+def page_tpcvm_by_client():
+    st.title("💸 TPCVM par client")
+
+    try:
+        res = _transactions_table().select("client_id,tax,side,cancelled").execute()
+        rows = res.data or []
+    except Exception as e:
+        st.error("Table `transactions` inexistante (ou accès refusé). Crée-la avec le SQL fourni.")
+        st.code(str(e))
+        return
+
+    if not rows:
+        st.info("Aucune transaction.")
+        return
+
+    df = pd.DataFrame(rows)
+    df = df[(df["side"] == "SELL") & (df["cancelled"] == False)]
+    df["tax"] = pd.to_numeric(df["tax"], errors="coerce").fillna(0.0)
+
+    df_agg = df.groupby("client_id", as_index=False)["tax"].sum().rename(columns={"tax": "TPCVM"})
+
+    id_to_name = {get_client_id(n): n for n in get_all_clients()}
+    df_agg["Client"] = df_agg["client_id"].map(id_to_name)
+    df_agg = df_agg[["Client", "TPCVM"]].sort_values("TPCVM", ascending=False)
+
+    st.dataframe(df_agg.style.format({"TPCVM": "{:,.2f}"}), use_container_width=True)
+
