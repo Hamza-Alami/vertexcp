@@ -523,18 +523,18 @@ def delete_transaction(transaction_id: int):
 
 def calculate_tpcvm_for_client(client_id: int) -> float:
     """Calculate total paid (TPCVM) for a client from all BUY transactions."""
-    # Get the latest TPCVM value from the most recent transaction
-    # TPCVM is cumulative and stored in each transaction
-    res = transactions_table().select("tpcvm, side").eq("client_id", client_id).eq("is_deleted", False).order("executed_at", desc=True).limit(1).execute()
-    if res.data:
-        # Return the latest TPCVM value (it's cumulative)
-        return float(res.data[0].get("tpcvm", 0.0))
-    
-    # If no transactions, calculate from BUY transactions
-    res_all = transactions_table().select("gross_amount, fees, side").eq("client_id", client_id).eq("is_deleted", False).execute()
+    # TPCVM = Total Payé = sum of all costs from BUY transactions
+    # Get all BUY transactions and sum gross_amount + fees
+    res = transactions_table().select("gross_amount, fees, side").eq("client_id", client_id).eq("is_deleted", False).execute()
     if not res.data:
         return 0.0
-    # Sum gross_amount + fees for all BUY transactions
-    total = sum(float(t.get("gross_amount", 0)) + float(t.get("fees", 0)) for t in res_all.data if t.get("side") == "BUY")
+    
+    # Sum gross_amount + fees for all BUY transactions only
+    total = 0.0
+    for t in res.data:
+        if t.get("side") == "BUY":
+            gross = float(t.get("gross_amount", 0))
+            fees = float(t.get("fees", 0))
+            total += gross + fees
+    
     return total
-
