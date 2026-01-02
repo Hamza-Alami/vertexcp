@@ -279,9 +279,13 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
             st.error(f"Erreur mise à jour stock {stock_name}: {e}")
             return
 
-    # Update Cash
-    new_cash = current_cash - cost_with_comm
-    if cash_match.empty:
+    # Update Cash - get fresh portfolio data after stock update
+    dfp_updated = get_portfolio(client_name)
+    cash_match_updated = dfp_updated[dfp_updated["valeur"] == "Cash"]
+    current_cash_updated = float(cash_match_updated["quantité"].values[0]) if not cash_match_updated.empty else 0.0
+    new_cash = current_cash_updated - cost_with_comm
+    
+    if cash_match_updated.empty:
         try:
             portfolio_table().upsert([{
                 "client_id": cid,
@@ -367,15 +371,24 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     tax_rate      = float(cinfo.get("tax_on_gains_rate") or 15.0)
     is_pea        = bool(cinfo.get("is_pea") or False)
 
+    # Get fresh portfolio data to ensure we have current quantities
     dfp = get_portfolio(client_name)
+    if dfp.empty:
+        st.error(f"Le portefeuille est vide pour ce client.")
+        return
+    
     match = dfp[dfp["valeur"] == stock_name]
     if match.empty:
         st.error(f"Le client ne possède pas {stock_name}.")
         return
 
     old_qty = float(match["quantité"].values[0])
+    if old_qty <= 0:
+        st.error(f"Quantité insuffisante: le client ne possède plus {stock_name}.")
+        return
+        
     if quantity > old_qty:
-        st.error(f"Quantité insuffisante: vend {quantity}, possède {old_qty}.")
+        st.error(f"Quantité insuffisante: vous voulez vendre {quantity}, mais le client ne possède que {old_qty}.")
         return
 
     old_vwap      = float(match["vwap"].values[0])
@@ -401,8 +414,9 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         st.error(f"Erreur mise à jour après vente: {e}")
         return
 
-    # Update Cash
-    cash_match = dfp[dfp["valeur"] == "Cash"]
+    # Update Cash - get fresh portfolio data after stock update
+    dfp_updated = get_portfolio(client_name)
+    cash_match = dfp_updated[dfp_updated["valeur"] == "Cash"]
     old_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
     new_cash = old_cash + net_proceeds
 
@@ -430,14 +444,16 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
 
     # Calculate TPCVM (total paid) - remains the same for sells (no new cost basis)
     # TPCVM is only updated on BUY transactions, so we use the current value
+    # For PEA accounts, TPCVM should still track total paid, but tax is 0
     from db_utils import calculate_tpcvm_for_client
     current_tpcvm = calculate_tpcvm_for_client(cid)
 
-    # Record transaction
+    # Record transaction - MUST happen after portfolio update
     try:
         trade_date_str = trade_date if trade_date else str(date.today())
         realized_pl_after_tax = profit - tax
-        tax_rate_used = tax_rate if (profit > 0 and not is_pea) else 0.0
+        # Tax rate used: 0 for PEA, otherwise the tax_rate (15% default)
+        tax_rate_used = 0.0 if is_pea else (tax_rate if profit > 0 else 0.0)
         
         _record_transaction(
             client_id=cid,
@@ -448,16 +464,16 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
             gross_amount=raw_proceeds,
             fees=commission,
             tax_rate_used=tax_rate_used,
-            tpcvm=current_tpcvm,
-            realized_pl=realized_pl_after_tax,  # Using single realized_pl field
+            tpcvm=current_tpcvm,  # TPCVM = total paid, doesn't change on sell
+            realized_pl=realized_pl_after_tax,  # P/L after tax
             net_cash_flow=net_proceeds,  # Positive for sell
             trade_date=trade_date_str,
             snapshot_before=snapshot_before,
             snapshot_after=snapshot_after
         )
     except Exception as e:
-        st.warning(f"⚠️ Transaction enregistrée mais erreur lors de la sauvegarde: {e}")
-        # Don't fail the transaction, just warn
+        st.error(f"❌ Erreur lors de l'enregistrement de la transaction: {e}")
+        # Transaction happened but recording failed - this is a problem
 
     # Show detailed breakdown
     st.success(f"✅ Vente réussie!")
@@ -492,4 +508,3 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     
     st.info(breakdown_text)
     st.rerun()
- 
