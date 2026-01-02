@@ -289,11 +289,17 @@ def fetch_instruments():
 #           Client / Portfolio / Performance
 ##################################################
 
-def get_all_clients():
+@st.cache_data(ttl=60)
+def _cached_get_all_clients():
+    """Cached version of get_all_clients."""
     res = client_table().select("*").execute()
     if not res.data:
         return []
     return [r["name"] for r in res.data]
+
+def get_all_clients():
+    """Get all clients (with cache)."""
+    return _cached_get_all_clients()
 
 def get_client_info(client_name: str):
     res = client_table().select("*").eq("name", client_name).execute()
@@ -354,12 +360,53 @@ def delete_client(cname: str):
     if cid is None:
         st.error("Client introuvable.")
         return
+    
+    # Check if client has portfolio or transactions
     try:
-        client_table().delete().eq("id", cid).execute()
-        st.success(f"Client '{cname}' supprimé.")
-        st.rerun()
+        portfolio_check = portfolio_table().select("id").eq("client_id", cid).limit(1).execute()
+        has_portfolio = len(portfolio_check.data) > 0
+        
+        transactions_check = transactions_table().select("id").eq("client_id", cid).limit(1).execute()
+        has_transactions = len(transactions_check.data) > 0
+        
+        if has_portfolio or has_transactions:
+            st.warning(f"⚠️ Le client '{cname}' a un portefeuille et/ou des transactions. "
+                      f"La suppression supprimera également toutes les données associées (cascade).")
     except Exception as e:
-        st.error(f"Erreur lors de la suppression du client: {e}")
+        st.warning(f"Impossible de vérifier les données associées: {e}")
+    
+    try:
+        # Delete client (cascade should handle related data if foreign keys are set up)
+        result = client_table().delete().eq("id", cid).execute()
+        
+        # Clear cache to ensure fresh data
+        _cached_get_all_clients.clear()
+        
+        # Verify deletion
+        verify = client_table().select("id").eq("id", cid).execute()
+        if len(verify.data) == 0:
+            st.success(f"✅ Client '{cname}' supprimé avec succès.")
+            st.rerun()
+        else:
+            st.error(f"❌ La suppression a échoué. Le client existe toujours.")
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "foreign key" in error_msg or "constraint" in error_msg or "violates" in error_msg:
+            st.error(f"❌ Impossible de supprimer le client '{cname}': des données sont encore liées. "
+                    f"Veuillez d'abord supprimer manuellement le portefeuille et les transactions, "
+                    f"ou configurez les clés étrangères avec ON DELETE CASCADE dans votre base de données.")
+            st.info("💡 Pour activer la suppression en cascade, exécutez dans Supabase SQL Editor:\n"
+                   "```sql\n"
+                   "ALTER TABLE portfolios DROP CONSTRAINT IF EXISTS portfolios_client_id_fkey;\n"
+                   "ALTER TABLE portfolios ADD CONSTRAINT portfolios_client_id_fkey\n"
+                   "  FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE;\n"
+                   "\n"
+                   "ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_client_id_fkey;\n"
+                   "ALTER TABLE transactions ADD CONSTRAINT transactions_client_id_fkey\n"
+                   "  FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE;\n"
+                   "```")
+        else:
+            st.error(f"❌ Erreur lors de la suppression du client: {e}")
 
 def update_client_rates(client_name: str,
                         exchange_comm: float,
