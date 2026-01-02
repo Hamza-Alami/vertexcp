@@ -55,9 +55,9 @@ def compute_poids_masi():
     instr_renamed = instruments_df.rename(columns={"instrument_name": "valeur"})
     merged = pd.merge(instr_renamed, stocks_df, on="valeur", how="left")
 
-    merged["cours"] = merged["cours"].fillna(0.0).astype(float)
-    merged["nombre_de_titres"] = merged["nombre_de_titres"].fillna(0.0).astype(float)
-    merged["facteur_flottant"] = merged["facteur_flottant"].fillna(0.0).astype(float)
+    merged["cours"] = pd.to_numeric(merged["cours"], errors='coerce').fillna(0.0)
+    merged["nombre_de_titres"] = pd.to_numeric(merged["nombre_de_titres"], errors='coerce').fillna(0.0)
+    merged["facteur_flottant"] = pd.to_numeric(merged["facteur_flottant"], errors='coerce').fillna(0.0)
 
     # exclude zero
     merged = merged[(merged["cours"] != 0.0) & (merged["nombre_de_titres"] != 0.0)].copy()
@@ -313,27 +313,37 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
     new_tpcvm = previous_tpcvm + cost_with_comm
 
     # Record transaction
-    trade_date_str = trade_date if trade_date else str(date.today())
-    _record_transaction(
-        client_id=cid,
-        side="BUY",
-        symbol=stock_name,  # Using 'symbol' to match DB schema
-        quantity=quantity,
-        price=transaction_price,
-        gross_amount=raw_cost,
-        fees=commission,
-        tax_rate_used=0.0,  # No tax on buy
-        tpcvm=new_tpcvm,
-        realized_pl=0.0,  # No P/L on buy
-        net_cash_flow=-cost_with_comm,  # Negative for buy
-        trade_date=trade_date_str,
-        snapshot_before=snapshot_before,
-        snapshot_after=snapshot_after
-    )
+    try:
+        trade_date_str = trade_date if trade_date else str(date.today())
+        _record_transaction(
+            client_id=cid,
+            side="BUY",
+            symbol=stock_name,  # Using 'symbol' to match DB schema
+            quantity=quantity,
+            price=transaction_price,
+            gross_amount=raw_cost,
+            fees=commission,
+            tax_rate_used=0.0,  # No tax on buy
+            tpcvm=new_tpcvm,
+            realized_pl=0.0,  # No P/L on buy
+            net_cash_flow=-cost_with_comm,  # Negative for buy
+            trade_date=trade_date_str,
+            snapshot_before=snapshot_before,
+            snapshot_after=snapshot_after
+        )
+    except Exception as e:
+        st.warning(f"⚠️ Transaction enregistrée mais erreur lors de la sauvegarde: {e}")
+        # Don't fail the transaction, just warn
 
-    st.success(
-        f"Achat de {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
-        f"coût total {cost_with_comm:,.2f} (commission incluse)."
+    # Show detailed breakdown
+    st.success(f"✅ Achat réussi!")
+    st.info(
+        f"**Détails de l'achat:**\n"
+        f"- Quantité: {quantity:.0f} {stock_name}\n"
+        f"- Prix unitaire: {transaction_price:,.2f} MAD\n"
+        f"- Montant brut: {raw_cost:,.2f} MAD\n"
+        f"- Commission ({exchange_rate}%): {commission:,.2f} MAD\n"
+        f"- **Coût total: {cost_with_comm:,.2f} MAD**"
     )
     st.rerun()
 
@@ -424,29 +434,61 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     current_tpcvm = calculate_tpcvm_for_client(cid)
 
     # Record transaction
-    trade_date_str = trade_date if trade_date else str(date.today())
-    realized_pl_after_tax = profit - tax
-    tax_rate_used = tax_rate if (profit > 0 and not is_pea) else 0.0
-    
-    _record_transaction(
-        client_id=cid,
-        side="SELL",
-        symbol=stock_name,  # Using 'symbol' to match DB schema
-        quantity=quantity,
-        price=transaction_price,
-        gross_amount=raw_proceeds,
-        fees=commission,
-        tax_rate_used=tax_rate_used,
-        tpcvm=current_tpcvm,
-        realized_pl=realized_pl_after_tax,  # Using single realized_pl field
-        net_cash_flow=net_proceeds,  # Positive for sell
-        trade_date=trade_date_str,
-        snapshot_before=snapshot_before,
-        snapshot_after=snapshot_after
-    )
+    try:
+        trade_date_str = trade_date if trade_date else str(date.today())
+        realized_pl_after_tax = profit - tax
+        tax_rate_used = tax_rate if (profit > 0 and not is_pea) else 0.0
+        
+        _record_transaction(
+            client_id=cid,
+            side="SELL",
+            symbol=stock_name,  # Using 'symbol' to match DB schema
+            quantity=quantity,
+            price=transaction_price,
+            gross_amount=raw_proceeds,
+            fees=commission,
+            tax_rate_used=tax_rate_used,
+            tpcvm=current_tpcvm,
+            realized_pl=realized_pl_after_tax,  # Using single realized_pl field
+            net_cash_flow=net_proceeds,  # Positive for sell
+            trade_date=trade_date_str,
+            snapshot_before=snapshot_before,
+            snapshot_after=snapshot_after
+        )
+    except Exception as e:
+        st.warning(f"⚠️ Transaction enregistrée mais erreur lors de la sauvegarde: {e}")
+        # Don't fail the transaction, just warn
 
-    st.success(
-        f"Vendu {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
-        f"net {net_proceeds:,.2f} (commission + taxe gains)."
+    # Show detailed breakdown
+    st.success(f"✅ Vente réussie!")
+    breakdown_text = (
+        f"**Détails de la vente:**\n"
+        f"- Quantité: {quantity:.0f} {stock_name}\n"
+        f"- Prix unitaire: {transaction_price:,.2f} MAD\n"
+        f"- Montant brut: {raw_proceeds:,.2f} MAD\n"
+        f"- Commission ({exchange_rate}%): {commission:,.2f} MAD\n"
     )
+    
+    if profit > 0:
+        breakdown_text += (
+            f"- Profit brut: {profit:,.2f} MAD\n"
+        )
+        if tax > 0:
+            breakdown_text += (
+                f"- Taxe ({tax_rate}%): {tax:,.2f} MAD\n"
+            )
+        else:
+            breakdown_text += (
+                f"- Taxe: 0.00 MAD (Compte PEA - exonéré)\n"
+            )
+        breakdown_text += (
+            f"- **Net reçu: {net_proceeds:,.2f} MAD**"
+        )
+    else:
+        breakdown_text += (
+            f"- Perte: {abs(profit):,.2f} MAD\n"
+            f"- **Net reçu: {net_proceeds:,.2f} MAD**"
+        )
+    
+    st.info(breakdown_text)
     st.rerun()
