@@ -19,10 +19,7 @@ from db_utils import (
     get_performance_periods_for_client,
     create_performance_period,
     get_latest_performance_period_for_all_clients,
-    fetch_stocks,
-    get_transactions_for_client,
-    delete_transaction,
-    calculate_tpcvm_for_client
+    fetch_stocks
 )
 from logic import (
     buy_shares,
@@ -56,15 +53,8 @@ def page_manage_clients():
 
         with st.form("delete_client_form", clear_on_submit=True):
             delete_choice = st.selectbox("Sélectionner le client à supprimer", options=existing, key="delete_choice")
-            confirm_delete = st.checkbox(
-                f"⚠️ Je confirme vouloir supprimer le client '{delete_choice}' (cette action est irréversible)",
-                key="confirm_delete_client"
-            )
-            if st.form_submit_button("🗑️ Supprimer ce client", disabled=not confirm_delete):
-                if confirm_delete:
-                    delete_client(delete_choice)
-                else:
-                    st.warning("Veuillez cocher la case de confirmation pour supprimer le client.")
+            if st.form_submit_button("🗑️ Supprimer ce client"):
+                delete_client(delete_choice)
 
 
 ########################################
@@ -175,7 +165,7 @@ def show_portfolio(client_name, read_only=False):
         df_styled = df_disp.style.format(
             "{:,.2f}",
             subset=["quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids", "poids_masi"]
-        ).map(color_perf, subset=["performance_latente"]) \
+        ).applymap(color_perf, subset=["performance_latente"]) \
          .apply(bold_cash, axis=1)
 
         st.dataframe(df_styled, use_container_width=True)
@@ -227,7 +217,7 @@ def show_portfolio(client_name, read_only=False):
     df_styled = df2.drop(columns="__cash_marker").style.format(
         "{:,.2f}",
         subset=["quantité","vwap","cours","cost_total","valorisation","performance_latente","poids_masi","poids"]
-    ).map(color_perf, subset=["performance_latente"]) \
+    ).applymap(color_perf, subset=["performance_latente"]) \
      .apply(bold_cash, axis=1)
 
     st.write("#### Actifs actuels du portefeuille")
@@ -264,9 +254,8 @@ def show_portfolio(client_name, read_only=False):
     buy_stock = st.selectbox("Choisir la valeur à acheter", _stocks["valeur"].tolist())
     buy_price = st.number_input("Prix d'achat", min_value=0.0, value=0.0, step=0.01)
     buy_qty   = st.number_input("Quantité à acheter", min_value=1, value=1, step=1)
-    buy_date  = st.date_input("Date de transaction", value=date.today(), key="buy_date")
     if st.button("Acheter"):
-        buy_shares(client_name, buy_stock, buy_price, float(buy_qty), str(buy_date))
+        buy_shares(client_name, buy_stock, buy_price, float(buy_qty))
 
     # SELL
     st.write("### Opération de Vente")
@@ -274,9 +263,8 @@ def show_portfolio(client_name, read_only=False):
     sell_stock = st.selectbox("Choisir la valeur à vendre", existing_stocks)
     sell_price = st.number_input("Prix de vente", min_value=0.0, value=0.0, step=0.01)
     sell_qty   = st.number_input("Quantité à vendre", min_value=1, value=1, step=1)
-    sell_date  = st.date_input("Date de transaction", value=date.today(), key="sell_date")
     if st.button("Vendre"):
-        sell_shares(client_name, sell_stock, sell_price, float(sell_qty), str(sell_date))
+        sell_shares(client_name, sell_stock, sell_price, float(sell_qty))
 
 
 ########################################
@@ -766,12 +754,8 @@ def simulation_for_client_updated(client_name):
         return
     strategies_df = get_strategies()
     if "strategy_id" in client and client["strategy_id"]:
-        # Check if 'id' column exists in strategies_df
-        if not strategies_df.empty and "id" in strategies_df.columns:
-            strat = strategies_df[strategies_df["id"] == client["strategy_id"]]
-            targets = json.loads(strat.iloc[0]["targets"]) if not strat.empty else {}
-        else:
-            targets = {}
+        strat = strategies_df[strategies_df["id"] == client["strategy_id"]]
+        targets = json.loads(strat.iloc[0]["targets"]) if not strat.empty else {}
     else:
         targets = {}
     # Ensure all assets in the strategy appear even if not in portfolio.
@@ -985,27 +969,19 @@ def page_strategies_and_simulation():
 
     # Tab 0: Gestion des Stratégies
     with tabs[0]:
-        with st.expander("Stratégies existantes", expanded=True):
+        with st.expander("Stratégies existantes", expanded=False):
             strategies_df = get_strategies()
             if not strategies_df.empty:
-                st.write(f"**{len(strategies_df)} stratégie(s) trouvée(s)**")
                 display_rows = []
                 for _, row in strategies_df.iterrows():
-                    try:
-                        targets = json.loads(row["targets"]) if isinstance(row["targets"], str) else row["targets"]
-                        cash = 100 - sum(targets.values())
-                        targets["Cash"] = cash
-                        details = ", ".join([f"{k} : {v}%" for k, v in targets.items()])
-                        display_rows.append({"Nom": row["name"], "Détails": details})
-                    except Exception as e:
-                        st.warning(f"Erreur lors de l'affichage de la stratégie {row.get('name', 'Unknown')}: {e}")
-                
-                if display_rows:
-                    st.table(pd.DataFrame(display_rows))
-                else:
-                    st.info("Aucune stratégie valide à afficher.")
+                    targets = json.loads(row["targets"])
+                    cash = 100 - sum(targets.values())
+                    targets["Cash"] = cash
+                    details = ", ".join([f"{k} : {v}%" for k, v in targets.items()])
+                    display_rows.append({"Nom": row["name"], "Détails": details})
+                st.table(pd.DataFrame(display_rows))
             else:
-                st.info("Aucune stratégie existante. Créez-en une ci-dessous.")
+                st.info("Aucune stratégie existante.")
         with st.expander("Créer une nouvelle stratégie", expanded=False):
             if "new_strategy_targets" not in st.session_state:
                 st.session_state.new_strategy_targets = {}
@@ -1047,9 +1023,8 @@ def page_strategies_and_simulation():
                 selected_strat_name = st.selectbox("Sélectionnez une stratégie à modifier", strat_options, key="edit_strat_select")
                 selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
                 # Initialize session state for updated targets if not already set
-                strategy_id = selected_strategy.get("id") if "id" in selected_strategy else None
-                if "updated_strategy_targets" not in st.session_state or st.session_state.updated_strategy_targets.get("strategy_id") != strategy_id:
-                    st.session_state.updated_strategy_targets = {"strategy_id": strategy_id, "targets": json.loads(selected_strategy["targets"])}
+                if "updated_strategy_targets" not in st.session_state or st.session_state.updated_strategy_targets.get("strategy_id") != selected_strategy["id"]:
+                    st.session_state.updated_strategy_targets = {"strategy_id": selected_strategy["id"], "targets": json.loads(selected_strategy["targets"])}
                 current_targets = st.session_state.updated_strategy_targets["targets"]
         
                 st.write("Actions actuelles dans la stratégie :")
@@ -1083,20 +1058,12 @@ def page_strategies_and_simulation():
                     if total_updated > 100:
                         st.error(f"Le total dépasse 100% de {total_updated - 100}%.")
                     else:
-                        strategy_id = selected_strategy.get("id") if "id" in selected_strategy else None
-                        if strategy_id:
-                            update_strategy(strategy_id, selected_strat_name, current_targets)
-                            st.success("Stratégie mise à jour.")
-                            # Clear the session state for updated targets so next modification starts fresh.
-                            st.session_state.pop("updated_strategy_targets")
-                        else:
-                            st.error("Impossible de trouver l'ID de la stratégie.")
+                        update_strategy(selected_strategy["id"], selected_strat_name, current_targets)
+                        st.success("Stratégie mise à jour.")
+                        # Clear the session state for updated targets so next modification starts fresh.
+                        st.session_state.pop("updated_strategy_targets")
                 if st.button("Supprimer la stratégie"):
-                    strategy_id = selected_strategy.get("id") if "id" in selected_strategy else None
-                    if strategy_id:
-                        delete_strategy(strategy_id)
-                    else:
-                        st.error("Impossible de trouver l'ID de la stratégie.")
+                    delete_strategy(selected_strategy["id"])
             else:
                 st.info("Aucune stratégie à modifier.")
 
@@ -1114,24 +1081,17 @@ def page_strategies_and_simulation():
                 with col2:
                     current_client = get_client_info(client)
                     current_strat_id = current_client.get("strategy_id", None)
-                    if "id" in strategies_df.columns:
-                        options = strategies_df["id"].tolist()
-                        options_names = strategies_df["name"].tolist()
-                        selected_strat_id = st.selectbox(
-                            f"Stratégie pour {client}",
-                            options=options,
-                            format_func=lambda x: options_names[options.index(x)] if x in options else "None",
-                            index=options.index(current_strat_id) if current_strat_id in options else 0,
-                            key=f"assign_{client}"
-                        )
-                    else:
-                        st.warning("Colonne 'id' manquante dans les stratégies.")
-                        selected_strat_id = None
+                    options = strategies_df["id"].tolist()
+                    options_names = strategies_df["name"].tolist()
+                    selected_strat_id = st.selectbox(
+                        f"Stratégie pour {client}",
+                        options=options,
+                        format_func=lambda x: options_names[options.index(x)] if x in options else "None",
+                        index=options.index(current_strat_id) if current_strat_id in options else 0,
+                        key=f"assign_{client}"
+                    )
                     if st.button(f"Assigner la stratégie à {client}", key=f"assign_btn_{client}"):
-                        if selected_strat_id is not None:
-                            assign_strategy_to_client(client, selected_strat_id)
-                        else:
-                            st.error("Impossible d'assigner la stratégie.")
+                        assign_strategy_to_client(client, selected_strat_id)
         else:
             st.info("Assurez-vous qu'il existe à la fois des clients et des stratégies.")
 
@@ -1149,11 +1109,7 @@ def page_strategies_and_simulation():
             strat_choice = st.selectbox("Sélectionnez une stratégie", strategies_df["name"].tolist(), key="multi_strat")
             selected_strategy = strategies_df[strategies_df["name"] == strat_choice].iloc[0]
             all_clients = get_all_clients()
-            strategy_id = selected_strategy.get("id") if "id" in selected_strategy else None
-            if strategy_id:
-                clients_with_strat = [c for c in all_clients if get_client_info(c).get("strategy_id") == strategy_id]
-            else:
-                clients_with_strat = []
+            clients_with_strat = [c for c in all_clients if get_client_info(c).get("strategy_id") == selected_strategy["id"]]
             if not clients_with_strat:
                 st.info("Aucun client n'est assigné à cette stratégie.")
             else:
@@ -1197,169 +1153,8 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 
-########################################
-# 9) Transaction Management Page
-########################################
-def page_transactions():
-    st.title("📋 Gestion des Transactions")
-    
-    clients = get_all_clients()
-    if not clients:
-        st.warning("Aucun client trouvé.")
-        return
-    
-    client_name = st.selectbox("Sélectionner un client", clients)
-    if not client_name:
-        return
-    
-    cid = get_client_id(client_name)
-    if cid is None:
-        st.error("Client introuvable.")
-        return
-    
-    # Date filter
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input("Date de début", value=None, key="trans_start_date")
-    with col2:
-        end_date = st.date_input("Date de fin", value=None, key="trans_end_date")
-    
-    # Get transactions
-    start_date_str = str(start_date) if start_date else None
-    end_date_str = str(end_date) if end_date else None
-    df_transactions = get_transactions_for_client(cid, start_date_str, end_date_str)
-    
-    if df_transactions.empty:
-        st.info("Aucune transaction trouvée pour ce client.")
-        return
-    
-    # Calculate TPCVM
-    tpcvm = calculate_tpcvm_for_client(cid)
-    st.metric("TPCVM (Total Payé)", f"{tpcvm:,.2f} MAD")
-    
-    # Prepare display dataframe (matching actual DB schema)
-    display_cols = [
-        "trade_date", "side", "symbol", "quantity", "price",
-        "gross_amount", "fees", "tax_rate_used", "tpcvm",
-        "realized_pl", "net_cash_flow", "note"
-    ]
-    
-    # Filter columns that exist
-    available_cols = [col for col in display_cols if col in df_transactions.columns]
-    df_display = df_transactions[available_cols].copy()
-    
-    # Rename columns for better display
-    df_display = df_display.rename(columns={
-        "trade_date": "Date",
-        "side": "Type",
-        "symbol": "Valeur",  # Using 'symbol' from DB, display as 'Valeur'
-        "quantity": "Quantité",
-        "price": "Prix",
-        "gross_amount": "Montant Brut",
-        "fees": "Commissions",
-        "tax_rate_used": "Taux Impôt (%)",
-        "tpcvm": "TPCVM",
-        "realized_pl": "P/L Réalisé",
-        "net_cash_flow": "Flux Net",
-        "note": "Note"
-    })
-    
-    # Format Type column
-    if "Type" in df_display.columns:
-        df_display["Type"] = df_display["Type"].map({
-            "BUY": "Achat",
-            "SELL": "Vente",
-            "INIT": "Initialisation",
-            "ADJUST": "Ajustement"
-        }).fillna(df_display["Type"])
-    
-    # Display transactions
-    st.subheader("Transactions")
-    
-    # Add delete functionality
-    if "id" in df_transactions.columns:
-        # Create a selectbox for transaction deletion
-        trans_ids = df_transactions["id"].tolist()
-        trans_display = []
-        for idx, row in df_transactions.iterrows():
-            trans_display.append(
-                f"ID {row['id']} - {row.get('side', 'N/A')} {row.get('symbol', 'N/A')} "
-                f"({row.get('quantity', 0)} @ {row.get('price', 0)}) - {row.get('trade_date', 'N/A')}"
-            )
-        
-        st.write("### Supprimer une transaction")
-        selected_trans_idx = st.selectbox(
-            "Sélectionner une transaction à supprimer",
-            range(len(trans_display)),
-            format_func=lambda x: trans_display[x],
-            key="delete_trans_select"
-        )
-        
-        if selected_trans_idx is not None and selected_trans_idx < len(trans_display):
-            selected_trans_id = trans_ids[selected_trans_idx]
-            selected_trans_info = trans_display[selected_trans_idx]
-            
-            st.warning(f"⚠️ Transaction sélectionnée: **{selected_trans_info}**")
-            st.info("ℹ️ La suppression restaurera le portefeuille à l'état d'avant cette transaction.")
-            
-            confirm_delete_trans = st.checkbox(
-                "⚠️ Je confirme vouloir supprimer cette transaction (cette action est irréversible)",
-                key="confirm_delete_transaction"
-            )
-            
-            if st.button("🗑️ Supprimer cette transaction", key="delete_trans_btn", disabled=not confirm_delete_trans):
-                if confirm_delete_trans:
-                    if delete_transaction(selected_trans_id):
-                        st.success("✅ Transaction supprimée et portefeuille restauré avec succès!")
-                        st.rerun()
-                    else:
-                        st.error("❌ Erreur lors de la suppression de la transaction.")
-                else:
-                    st.warning("Veuillez cocher la case de confirmation pour supprimer la transaction.")
-    
-    # Style the dataframe
-    numeric_cols = df_display.select_dtypes(include=["float64", "int64"]).columns
-    styled_df = df_display.style.format(
-        "{:,.2f}",
-        subset=[col for col in numeric_cols if col != "Quantité"]
-    ).format("{:,.0f}", subset=["Quantité"] if "Quantité" in df_display.columns else [])
-    
-    # Color code P/L
-    if "P/L Réalisé" in df_display.columns:
-        def color_pl(val):
-            if isinstance(val, (float, int)):
-                if val > 0:
-                    return "color: green; font-weight: bold;"
-                elif val < 0:
-                    return "color: red; font-weight: bold;"
-            return ""
-        styled_df = styled_df.map(color_pl, subset=["P/L Réalisé"])
-    
-    st.dataframe(styled_df, use_container_width=True, height=400)
-    
-    # Summary statistics
-    st.subheader("Statistiques")
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        total_buys = len(df_transactions[df_transactions["side"] == "BUY"])
-        st.metric("Total Achats", total_buys)
-    
-    with col2:
-        total_sells = len(df_transactions[df_transactions["side"] == "SELL"])
-        st.metric("Total Ventes", total_sells)
-    
-    with col3:
-        total_fees = df_transactions["fees"].sum() if "fees" in df_transactions.columns else 0
-        st.metric("Total Commissions", f"{total_fees:,.2f} MAD")
-    
-    with col4:
-        total_pl = df_transactions["realized_pl"].sum() if "realized_pl" in df_transactions.columns else 0
-        st.metric("P/L Réalisé Total", f"{total_pl:,.2f} MAD")
-
-
 def page_reporting():
-    st.title("📊 Rapport Client Complet")
+    st.title("📊 Rapport Client")
 
     clients = get_all_clients()
     if not clients:
@@ -1370,18 +1165,44 @@ def page_reporting():
     if not client_name:
         return
 
-    cid = get_client_id(client_name)
-    cinfo = get_client_info(client_name)
-    
-    # Key Metrics at the top
-    st.header("📈 Vue d'ensemble")
-    col1, col2, col3, col4 = st.columns(4)
-    
+    # ---------------------------------------------------
+    # Portfolio section
+    # ---------------------------------------------------
+    st.subheader("Portefeuille du Client")
+    show_portfolio(client_name, read_only=True)   # ✅ reuse logic
+
     df_portfolio = get_portfolio(client_name)
     if df_portfolio.empty:
         st.warning("Pas de portefeuille pour ce client.")
         return
 
+    total_val = df_portfolio["valorisation"].sum()
+
+    # Donut chart using column poids
+    fig_donut = px.pie(df_portfolio, names="valeur", values="poids", hole=0.5,
+                       title="Répartition du Portefeuille (%)")
+    st.plotly_chart(fig_donut, use_container_width=True)
+
+    # ---------------------------------------------------
+    # Performance section
+    # ---------------------------------------------------
+    st.subheader("Performance & Surperformance")
+
+    cid = get_client_id(client_name)
+    df_periods = get_performance_periods_for_client(cid)
+    if df_periods.empty:
+        st.info("Aucune période de performance enregistrée.")
+        return
+
+    # latest period
+    df_periods = df_periods.copy()
+    df_periods["start_date"] = pd.to_datetime(df_periods["start_date"], errors="coerce").dt.date
+    row_chosen = df_periods.sort_values("start_date", ascending=False).iloc[0]
+
+    portfolio_start = float(row_chosen.get("start_value", 0))
+    masi_start = float(row_chosen.get("masi_start_value", 0))
+
+    # Current portfolio valuation
     stx = db_utils.fetch_stocks()
     cur_val = 0.0
     for _, prow in df_portfolio.iterrows():
@@ -1390,180 +1211,48 @@ def page_reporting():
         matchp = stx[stx["valeur"] == val]
         px_ = float(matchp["cours"].values[0]) if not matchp.empty else 0.0
         cur_val += (qty_ * px_)
-    
-    total_val = cur_val
-    tpcvm = calculate_tpcvm_for_client(cid)
-    # Calculate total cost from portfolio (current holdings only)
-    # cost_total is calculated as quantity * vwap for each holding
-    if "cost_total" in df_portfolio.columns:
-        total_cost = df_portfolio["cost_total"].sum()
+
+    gains_port = cur_val - portfolio_start
+    perf_port = (gains_port / portfolio_start) * 100 if portfolio_start > 0 else 0
+
+    masi_now = get_current_masi()
+    gains_masi = masi_now - masi_start
+    perf_masi = (gains_masi / masi_start) * 100 if masi_start > 0 else 0
+
+    surp_pct = perf_port - perf_masi
+    surp_abs = (surp_pct / 100.0) * portfolio_start
+
+    cinfo = get_client_info(client_name)
+    mgmt_rate = float(cinfo.get("management_fee_rate", 0)) / 100.0
+    if cinfo.get("bill_surperformance", False):
+        base_ = max(0, surp_abs)
     else:
-        # Fallback: calculate from quantity * vwap
-        total_cost = 0.0
-        for _, row in df_portfolio.iterrows():
-            qty = float(row.get("quantité", 0))
-            vwap = float(row.get("vwap", 0))
-            total_cost += qty * vwap
-    
-    # P/L latent = current value - cost basis of current holdings
-    unrealized_pl = total_val - total_cost
-    
-    with col1:
-        st.metric("Valeur Actuelle", f"{total_val:,.2f} MAD", delta=None)
-    with col2:
-        st.metric("TPCVM (Total Payé)", f"{tpcvm:,.2f} MAD", delta=None)
-    with col3:
-        st.metric("P/L Latent", f"{unrealized_pl:,.2f} MAD", 
-                 delta=f"{(unrealized_pl/tpcvm*100):.2f}%" if tpcvm > 0 else "0%")
-    with col4:
-        is_pea = bool(cinfo.get("is_pea", False)) if cinfo else False
-        st.metric("Type de Compte", "PEA" if is_pea else "Standard")
+        base_ = max(0, gains_port)
+    fees_ = base_ * mgmt_rate
 
-    # ---------------------------------------------------
-    # Portfolio section with enhanced visualization
-    # ---------------------------------------------------
-    st.header("💼 Portefeuille")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        show_portfolio(client_name, read_only=True)
-    
-    with col2:
-        # Donut chart
-        fig_donut = px.pie(df_portfolio[df_portfolio["valeur"] != "Cash"], 
-                          names="valeur", values="valorisation", hole=0.5,
-                          title="Répartition par Valeur")
-        fig_donut.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig_donut, use_container_width=True)
-        
-        # Asset allocation bar chart
-        df_non_cash = df_portfolio[df_portfolio["valeur"] != "Cash"].copy()
-        if not df_non_cash.empty:
-            fig_bar = px.bar(df_non_cash, x="valeur", y="valorisation",
-                           title="Valorisation par Actif",
-                           labels={"valorisation": "Valorisation (MAD)", "valeur": "Valeur"})
-            fig_bar.update_layout(showlegend=False)
-            st.plotly_chart(fig_bar, use_container_width=True)
+    results_df = pd.DataFrame([{
+        "Portf Départ": portfolio_start,
+        "Portf Actuel": cur_val,
+        "Gains Portf": gains_port,
+        "Perf Portf %": perf_port,
+        "MASI Départ": masi_start,
+        "MASI Actuel": masi_now,
+        "Gains MASI": gains_masi,
+        "Perf MASI %": perf_masi,
+        "Surperf %": surp_pct,
+        "Surperf Abs.": surp_abs
+    }])
+    st.dataframe(results_df.style.format("{:,.2f}"), use_container_width=True)
 
-    # ---------------------------------------------------
-    # Transaction Analysis
-    # ---------------------------------------------------
-    st.header("📋 Analyse des Transactions")
-    
-    df_transactions = get_transactions_for_client(cid)
-    if not df_transactions.empty:
-        # Transaction timeline
-        df_transactions_display = df_transactions.copy()
-        df_transactions_display["trade_date"] = pd.to_datetime(df_transactions_display["trade_date"])
-        
-        # Cumulative P/L chart
-        df_transactions_display = df_transactions_display.sort_values("trade_date")
-        df_transactions_display["cumulative_pl"] = df_transactions_display["realized_pl"].cumsum()
-        
-        fig_pl = px.line(df_transactions_display, x="trade_date", y="cumulative_pl",
-                        title="P/L Réalisé Cumulatif",
-                        labels={"cumulative_pl": "P/L Cumulatif (MAD)", "trade_date": "Date"})
-        st.plotly_chart(fig_pl, use_container_width=True)
-        
-        # Transaction summary
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            total_buys = len(df_transactions[df_transactions["side"] == "BUY"])
-            st.metric("Achats", total_buys)
-        with col2:
-            total_sells = len(df_transactions[df_transactions["side"] == "SELL"])
-            st.metric("Ventes", total_sells)
-        with col3:
-            realized_pl = df_transactions["realized_pl"].sum()
-            st.metric("P/L Réalisé", f"{realized_pl:,.2f} MAD")
-        with col4:
-            total_fees = df_transactions["fees"].sum()
-            st.metric("Commissions Total", f"{total_fees:,.2f} MAD")
-    else:
-        st.info("Aucune transaction enregistrée pour ce client.")
-
-    # ---------------------------------------------------
-    # Performance section with enhanced charts
-    # ---------------------------------------------------
-    st.header("📊 Performance & Surperformance")
-
-    cid = get_client_id(client_name)
-    df_periods = get_performance_periods_for_client(cid)
-    
-    if df_periods.empty:
-        st.info("Aucune période de performance enregistrée.")
-    else:
-        # latest period
-        df_periods = df_periods.copy()
-        df_periods["start_date"] = pd.to_datetime(df_periods["start_date"], errors="coerce").dt.date
-        row_chosen = df_periods.sort_values("start_date", ascending=False).iloc[0]
-
-        portfolio_start = float(row_chosen.get("start_value", 0))
-        masi_start = float(row_chosen.get("masi_start_value", 0))
-
-        gains_port = cur_val - portfolio_start
-        perf_port = (gains_port / portfolio_start) * 100 if portfolio_start > 0 else 0
-
-        masi_now = get_current_masi()
-        gains_masi = masi_now - masi_start
-        perf_masi = (gains_masi / masi_start) * 100 if masi_start > 0 else 0
-
-        surp_pct = perf_port - perf_masi
-        surp_abs = (surp_pct / 100.0) * portfolio_start
-
-        cinfo = get_client_info(client_name)
-        mgmt_rate = float(cinfo.get("management_fee_rate", 0)) / 100.0
-        if cinfo.get("bill_surperformance", False):
-            base_ = max(0, surp_abs)
-        else:
-            base_ = max(0, gains_port)
-        fees_ = base_ * mgmt_rate
-
-        # Performance metrics in columns
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Performance Portefeuille", f"{perf_port:.2f}%", 
-                     delta=f"{gains_port:,.2f} MAD")
-        with col2:
-            st.metric("Performance MASI", f"{perf_masi:.2f}%",
-                     delta=f"{gains_masi:.2f}")
-        with col3:
-            st.metric("Surperformance", f"{surp_pct:.2f}%",
-                     delta=f"{surp_abs:,.2f} MAD")
-
-        results_df = pd.DataFrame([{
-            "Portf Départ": portfolio_start,
-            "Portf Actuel": cur_val,
-            "Gains Portf": gains_port,
-            "Perf Portf %": perf_port,
-            "MASI Départ": masi_start,
-            "MASI Actuel": masi_now,
-            "Gains MASI": gains_masi,
-            "Perf MASI %": perf_masi,
-            "Surperf %": surp_pct,
-            "Surperf Abs.": surp_abs,
-            "Frais Calculés": fees_
-        }])
-        st.dataframe(results_df.style.format("{:,.2f}"), use_container_width=True)
-
-        # Enhanced line chart with more data points if available
-        perf_df = pd.DataFrame({
-            "Date": [row_chosen["start_date"], date.today()],
-            "Portefeuille": [0, perf_port],
-            "MASI": [0, perf_masi]
-        })
-        fig_line = px.line(perf_df, x="Date", y=["Portefeuille", "MASI"],
-                          title="Performance vs MASI (%)",
-                          labels={"value": "Performance (%)", "variable": "Type"})
-        fig_line.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        st.plotly_chart(fig_line, use_container_width=True)
-        
-        # Performance comparison bar chart
-        fig_comp = px.bar(x=["Portefeuille", "MASI"], y=[perf_port, perf_masi],
-                         title="Comparaison de Performance",
-                         labels={"x": "", "y": "Performance (%)"})
-        st.plotly_chart(fig_comp, use_container_width=True)
+    # Line chart
+    perf_df = pd.DataFrame({
+        "Date": [row_chosen["start_date"], date.today()],
+        "Portefeuille": [0, perf_port],
+        "MASI": [0, perf_masi]
+    })
+    fig_line = px.line(perf_df, x="Date", y=["Portefeuille", "MASI"],
+                       title="Performance vs MASI")
+    st.plotly_chart(fig_line, use_container_width=True)
 
     # ---------------------------------------------------
     # Export PDF
@@ -1644,5 +1333,3 @@ def page_reporting():
             file_name=f"Rapport_{client_name}.pdf",
             mime="application/pdf"
         )
-
-
