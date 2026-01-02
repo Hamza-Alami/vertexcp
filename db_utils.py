@@ -537,3 +537,4 @@ def calculate_tpcvm_for_client(client_id: int) -> float:
     # Sum gross_amount + fees for all BUY transactions
     total = sum(float(t.get("gross_amount", 0)) + float(t.get("fees", 0)) for t in res_all.data if t.get("side") == "BUY")
     return total
+
