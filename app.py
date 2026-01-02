@@ -11,50 +11,21 @@ from pages import (
     page_market,
     page_performance_fees,
     page_strategies_and_simulation,
-    page_reporting
-
+    page_reporting,
 )
 
-def add_sidebar_logo():
-    st.sidebar.image("Vertex.png", width=200)
-    st.sidebar.title("ALK ADVISORY")
+PAGES = {
+    "Gestion des clients": page_manage_clients,
+    "Créer portefeuille": page_create_portfolio,
+    "Portefeuille (1 client)": page_view_client_portfolio,
+    "Portefeuilles (tous)": page_view_all_portfolios,
+    "Inventaire": page_inventory,
+    "Marché": page_market,
+    "Performance & Frais": page_performance_fees,
+    "Stratégies & Simulation": page_strategies_and_simulation,
+    "Reporting (PDF)": page_reporting,
+}
 
-def main():
-    # Add logo and title to sidebar
-    add_sidebar_logo()
-    
-    page = st.sidebar.selectbox(
-        "📂 Navigation",
-        [
-            "Gestion des clients",
-            "Créer un Portefeuille",
-            "Gérer un Portefeuille",
-            "Stratégies et Simulation",
-            "Voir tout les portefeuilles",
-            "Inventaire",
-            "Marché",
-            "Performance & Fees",
-            "📊 Reporting"
-        ]
-    )
-    if page == "Gestion des clients":
-        page_manage_clients()
-    elif page == "Créer un Portefeuille":
-        page_create_portfolio()
-    elif page == "Gérer un Portefeuille":
-        page_view_client_portfolio()
-    elif page == "Voir tout les portefeuilles":
-        page_view_all_portfolios()
-    elif page == "Inventaire":
-        page_inventory()
-    elif page == "Marché":
-        page_market()
-    elif page == "Performance & Fees":
-        page_performance_fees() 
-    elif page == "Stratégies et Simulation":
-        page_strategies_and_simulation()
-    elif page == "📊 Reporting":
-        page_reporting()
-
-if __name__ == "__main__":
-    main()
+st.sidebar.title("Navigation")
+choice = st.sidebar.radio("Aller à :", list(PAGES.keys()))
+PAGES[choice]()
