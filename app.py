@@ -1,6 +1,6 @@
 import streamlit as st
 
-st.set_page_config(layout="wide", page_title="Benificiaam")
+st.set_page_config(layout="wide")
 
 from pages import (
     page_manage_clients,
@@ -11,59 +11,54 @@ from pages import (
     page_market,
     page_performance_fees,
     page_strategies_and_simulation,
-    page_reporting,
-    page_transactions_history,
-    page_tpcvm_by_client,
+    page_transactions,
+    page_reporting
+
 )
 
-with st.sidebar:
-    # ✅ Logo (remets ton fichier au bon endroit)
-    # Exemple: mets "logo.png" à la racine de benificiaam/
-    try:
-        st.image("Vertex.png", width=180)
-    except Exception:
-        st.markdown("### Benificiaam")
+def add_sidebar_logo():
+    st.sidebar.image("Vertex.png", width=200)
+    st.sidebar.title("ALK ADVISORY")
 
-    st.markdown("---")
-
-    # ✅ Selectbox (comme avant) au lieu de radio
-    page = st.selectbox(
-        "Menu",
+def main():
+    # Add logo and title to sidebar
+    add_sidebar_logo()
+    
+    page = st.sidebar.selectbox(
+        "📂 Navigation",
         [
-            "Gestion des Clients",
-            "Création Portefeuille",
-            "Portefeuille Client",
-            "Tous les Portefeuilles",
+            "Gestion des clients",
+            "Créer un Portefeuille",
+            "Gérer un Portefeuille",
+            "Stratégies et Simulation",
+            "Voir tout les portefeuilles",
             "Inventaire",
             "Marché",
-            "Performance & Frais",
-            "Stratégies & Simulation",
-            "Rapport Client (PDF)",
-            "Historique Transactions",
-            "TPCVM par client",
-        ],
-        index=0,
+            "Performance & Fees",
+            "📋 Transactions",
+            "📊 Reporting"
+        ]
     )
+    if page == "Gestion des clients":
+        page_manage_clients()
+    elif page == "Créer un Portefeuille":
+        page_create_portfolio()
+    elif page == "Gérer un Portefeuille":
+        page_view_client_portfolio()
+    elif page == "Voir tout les portefeuilles":
+        page_view_all_portfolios()
+    elif page == "Inventaire":
+        page_inventory()
+    elif page == "Marché":
+        page_market()
+    elif page == "Performance & Fees":
+        page_performance_fees() 
+    elif page == "Stratégies et Simulation":
+        page_strategies_and_simulation()
+    elif page == "📋 Transactions":
+        page_transactions()
+    elif page == "📊 Reporting":
+        page_reporting()
 
-if page == "Gestion des Clients":
-    page_manage_clients()
-elif page == "Création Portefeuille":
-    page_create_portfolio()
-elif page == "Portefeuille Client":
-    page_view_client_portfolio()
-elif page == "Tous les Portefeuilles":
-    page_view_all_portfolios()
-elif page == "Inventaire":
-    page_inventory()
-elif page == "Marché":
-    page_market()
-elif page == "Performance & Frais":
-    page_performance_fees()
-elif page == "Stratégies & Simulation":
-    page_strategies_and_simulation()
-elif page == "Rapport Client (PDF)":
-    page_reporting()
-elif page == "Historique Transactions":
-    page_transactions_history()
-elif page == "TPCVM par client":
-    page_tpcvm_by_client()
+if __name__ == "__main__":
+    main()
