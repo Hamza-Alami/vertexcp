@@ -337,7 +337,7 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
         st.warning(f"⚠️ Transaction enregistrée mais erreur lors de la sauvegarde: {e}")
         # Don't fail the transaction, just warn
 
-    # Show detailed breakdown
+    # Show detailed breakdown with verification
     st.success(f"✅ Achat réussi!")
     st.info(
         f"**Détails de l'achat:**\n"
@@ -345,7 +345,10 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
         f"- Prix unitaire: {transaction_price:,.2f} MAD\n"
         f"- Montant brut: {raw_cost:,.2f} MAD\n"
         f"- Commission ({exchange_rate}%): {commission:,.2f} MAD\n"
-        f"- **Coût total: {cost_with_comm:,.2f} MAD**"
+        f"- **Coût total: {cost_with_comm:,.2f} MAD**\n"
+        f"- **VWAP (inclut commission): {new_vwap if match.empty else new_vwap:,.2f} MAD**\n"
+        f"- Cash avant: {current_cash:,.2f} MAD\n"
+        f"- Cash après: {new_cash:,.2f} MAD"
     )
     st.rerun()
 
@@ -477,7 +480,7 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         st.error(f"❌ Erreur lors de l'enregistrement de la transaction: {e}")
         # Transaction happened but recording failed - this is a problem
 
-    # Show detailed breakdown
+    # Show detailed breakdown with verification
     st.success(f"✅ Vente réussie!")
     breakdown_text = (
         f"**Détails de la vente:**\n"
@@ -485,6 +488,7 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         f"- Prix unitaire: {transaction_price:,.2f} MAD\n"
         f"- Montant brut: {raw_proceeds:,.2f} MAD\n"
         f"- Commission ({exchange_rate}%): {commission:,.2f} MAD\n"
+        f"- Coût de base (VWAP × qty): {cost_of_shares:,.2f} MAD (VWAP: {old_vwap:,.2f})\n"
     )
     
     if profit_before_tax > 0:
@@ -500,13 +504,18 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
                 f"- Taxe: 0.00 MAD (Compte PEA - exonéré)\n"
             )
         breakdown_text += (
-            f"- **Net reçu: {net_proceeds:,.2f} MAD**"
+            f"- **Net reçu: {net_proceeds:,.2f} MAD**\n"
         )
     else:
         breakdown_text += (
             f"- Perte: {abs(profit_before_tax):,.2f} MAD\n"
-            f"- **Net reçu: {net_proceeds:,.2f} MAD**"
+            f"- **Net reçu: {net_proceeds:,.2f} MAD**\n"
         )
+    
+    breakdown_text += (
+        f"- Cash avant: {old_cash:,.2f} MAD\n"
+        f"- Cash après: {new_cash:,.2f} MAD"
+    )
     
     st.info(breakdown_text)
     st.rerun()
