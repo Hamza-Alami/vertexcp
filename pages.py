@@ -978,19 +978,27 @@ def page_strategies_and_simulation():
 
     # Tab 0: Gestion des Stratégies
     with tabs[0]:
-        with st.expander("Stratégies existantes", expanded=False):
+        with st.expander("Stratégies existantes", expanded=True):
             strategies_df = get_strategies()
             if not strategies_df.empty:
+                st.write(f"**{len(strategies_df)} stratégie(s) trouvée(s)**")
                 display_rows = []
                 for _, row in strategies_df.iterrows():
-                    targets = json.loads(row["targets"])
-                    cash = 100 - sum(targets.values())
-                    targets["Cash"] = cash
-                    details = ", ".join([f"{k} : {v}%" for k, v in targets.items()])
-                    display_rows.append({"Nom": row["name"], "Détails": details})
-                st.table(pd.DataFrame(display_rows))
+                    try:
+                        targets = json.loads(row["targets"]) if isinstance(row["targets"], str) else row["targets"]
+                        cash = 100 - sum(targets.values())
+                        targets["Cash"] = cash
+                        details = ", ".join([f"{k} : {v}%" for k, v in targets.items()])
+                        display_rows.append({"Nom": row["name"], "Détails": details})
+                    except Exception as e:
+                        st.warning(f"Erreur lors de l'affichage de la stratégie {row.get('name', 'Unknown')}: {e}")
+                
+                if display_rows:
+                    st.table(pd.DataFrame(display_rows))
+                else:
+                    st.info("Aucune stratégie valide à afficher.")
             else:
-                st.info("Aucune stratégie existante.")
+                st.info("Aucune stratégie existante. Créez-en une ci-dessous.")
         with st.expander("Créer une nouvelle stratégie", expanded=False):
             if "new_strategy_targets" not in st.session_state:
                 st.session_state.new_strategy_targets = {}
@@ -1364,7 +1372,19 @@ def page_reporting():
     
     total_val = cur_val
     tpcvm = calculate_tpcvm_for_client(cid)
-    total_cost = df_portfolio["cost_total"].sum() if "cost_total" in df_portfolio.columns else tpcvm
+    # Calculate total cost from portfolio (current holdings only)
+    # cost_total is calculated as quantity * vwap for each holding
+    if "cost_total" in df_portfolio.columns:
+        total_cost = df_portfolio["cost_total"].sum()
+    else:
+        # Fallback: calculate from quantity * vwap
+        total_cost = 0.0
+        for _, row in df_portfolio.iterrows():
+            qty = float(row.get("quantité", 0))
+            vwap = float(row.get("vwap", 0))
+            total_cost += qty * vwap
+    
+    # P/L latent = current value - cost basis of current holdings
     unrealized_pl = total_val - total_cost
     
     with col1:
