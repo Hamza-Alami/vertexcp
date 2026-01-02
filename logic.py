@@ -492,3 +492,4 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     
     st.info(breakdown_text)
     st.rerun()
+ 
