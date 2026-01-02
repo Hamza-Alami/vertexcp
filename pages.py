@@ -706,3 +706,4 @@ def page_taxes_tpcvm():
     st.subheader("Exporter")
     csv = view.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Télécharger CSV", csv, file_name="tpcvm_taxes.csv", mime="text/csv")
+
