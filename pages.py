@@ -168,7 +168,7 @@ def show_portfolio(client_name, read_only=False):
         df_styled = df_disp.style.format(
             "{:,.2f}",
             subset=["quantité", "vwap", "cours", "cost_total", "valorisation", "performance_latente", "poids", "poids_masi"]
-        ).applymap(color_perf, subset=["performance_latente"]) \
+        ).map(color_perf, subset=["performance_latente"]) \
          .apply(bold_cash, axis=1)
 
         st.dataframe(df_styled, use_container_width=True)
@@ -220,7 +220,7 @@ def show_portfolio(client_name, read_only=False):
     df_styled = df2.drop(columns="__cash_marker").style.format(
         "{:,.2f}",
         subset=["quantité","vwap","cours","cost_total","valorisation","performance_latente","poids_masi","poids"]
-    ).applymap(color_perf, subset=["performance_latente"]) \
+    ).map(color_perf, subset=["performance_latente"]) \
      .apply(bold_cash, axis=1)
 
     st.write("#### Actifs actuels du portefeuille")
@@ -759,8 +759,12 @@ def simulation_for_client_updated(client_name):
         return
     strategies_df = get_strategies()
     if "strategy_id" in client and client["strategy_id"]:
-        strat = strategies_df[strategies_df["id"] == client["strategy_id"]]
-        targets = json.loads(strat.iloc[0]["targets"]) if not strat.empty else {}
+        # Check if 'id' column exists in strategies_df
+        if not strategies_df.empty and "id" in strategies_df.columns:
+            strat = strategies_df[strategies_df["id"] == client["strategy_id"]]
+            targets = json.loads(strat.iloc[0]["targets"]) if not strat.empty else {}
+        else:
+            targets = {}
     else:
         targets = {}
     # Ensure all assets in the strategy appear even if not in portfolio.
@@ -1028,8 +1032,9 @@ def page_strategies_and_simulation():
                 selected_strat_name = st.selectbox("Sélectionnez une stratégie à modifier", strat_options, key="edit_strat_select")
                 selected_strategy = strategies_df[strategies_df["name"] == selected_strat_name].iloc[0]
                 # Initialize session state for updated targets if not already set
-                if "updated_strategy_targets" not in st.session_state or st.session_state.updated_strategy_targets.get("strategy_id") != selected_strategy["id"]:
-                    st.session_state.updated_strategy_targets = {"strategy_id": selected_strategy["id"], "targets": json.loads(selected_strategy["targets"])}
+                strategy_id = selected_strategy.get("id") if "id" in selected_strategy else None
+                if "updated_strategy_targets" not in st.session_state or st.session_state.updated_strategy_targets.get("strategy_id") != strategy_id:
+                    st.session_state.updated_strategy_targets = {"strategy_id": strategy_id, "targets": json.loads(selected_strategy["targets"])}
                 current_targets = st.session_state.updated_strategy_targets["targets"]
         
                 st.write("Actions actuelles dans la stratégie :")
@@ -1063,12 +1068,20 @@ def page_strategies_and_simulation():
                     if total_updated > 100:
                         st.error(f"Le total dépasse 100% de {total_updated - 100}%.")
                     else:
-                        update_strategy(selected_strategy["id"], selected_strat_name, current_targets)
-                        st.success("Stratégie mise à jour.")
-                        # Clear the session state for updated targets so next modification starts fresh.
-                        st.session_state.pop("updated_strategy_targets")
+                        strategy_id = selected_strategy.get("id") if "id" in selected_strategy else None
+                        if strategy_id:
+                            update_strategy(strategy_id, selected_strat_name, current_targets)
+                            st.success("Stratégie mise à jour.")
+                            # Clear the session state for updated targets so next modification starts fresh.
+                            st.session_state.pop("updated_strategy_targets")
+                        else:
+                            st.error("Impossible de trouver l'ID de la stratégie.")
                 if st.button("Supprimer la stratégie"):
-                    delete_strategy(selected_strategy["id"])
+                    strategy_id = selected_strategy.get("id") if "id" in selected_strategy else None
+                    if strategy_id:
+                        delete_strategy(strategy_id)
+                    else:
+                        st.error("Impossible de trouver l'ID de la stratégie.")
             else:
                 st.info("Aucune stratégie à modifier.")
 
@@ -1086,17 +1099,24 @@ def page_strategies_and_simulation():
                 with col2:
                     current_client = get_client_info(client)
                     current_strat_id = current_client.get("strategy_id", None)
-                    options = strategies_df["id"].tolist()
-                    options_names = strategies_df["name"].tolist()
-                    selected_strat_id = st.selectbox(
-                        f"Stratégie pour {client}",
-                        options=options,
-                        format_func=lambda x: options_names[options.index(x)] if x in options else "None",
-                        index=options.index(current_strat_id) if current_strat_id in options else 0,
-                        key=f"assign_{client}"
-                    )
+                    if "id" in strategies_df.columns:
+                        options = strategies_df["id"].tolist()
+                        options_names = strategies_df["name"].tolist()
+                        selected_strat_id = st.selectbox(
+                            f"Stratégie pour {client}",
+                            options=options,
+                            format_func=lambda x: options_names[options.index(x)] if x in options else "None",
+                            index=options.index(current_strat_id) if current_strat_id in options else 0,
+                            key=f"assign_{client}"
+                        )
+                    else:
+                        st.warning("Colonne 'id' manquante dans les stratégies.")
+                        selected_strat_id = None
                     if st.button(f"Assigner la stratégie à {client}", key=f"assign_btn_{client}"):
-                        assign_strategy_to_client(client, selected_strat_id)
+                        if selected_strat_id is not None:
+                            assign_strategy_to_client(client, selected_strat_id)
+                        else:
+                            st.error("Impossible d'assigner la stratégie.")
         else:
             st.info("Assurez-vous qu'il existe à la fois des clients et des stratégies.")
 
@@ -1114,7 +1134,11 @@ def page_strategies_and_simulation():
             strat_choice = st.selectbox("Sélectionnez une stratégie", strategies_df["name"].tolist(), key="multi_strat")
             selected_strategy = strategies_df[strategies_df["name"] == strat_choice].iloc[0]
             all_clients = get_all_clients()
-            clients_with_strat = [c for c in all_clients if get_client_info(c).get("strategy_id") == selected_strategy["id"]]
+            strategy_id = selected_strategy.get("id") if "id" in selected_strategy else None
+            if strategy_id:
+                clients_with_strat = [c for c in all_clients if get_client_info(c).get("strategy_id") == strategy_id]
+            else:
+                clients_with_strat = []
             if not clients_with_strat:
                 st.info("Aucun client n'est assigné à cette stratégie.")
             else:
@@ -1280,7 +1304,7 @@ def page_transactions():
                 elif val < 0:
                     return "color: red; font-weight: bold;"
             return ""
-        styled_df = styled_df.applymap(color_pl, subset=["P/L Réalisé"])
+        styled_df = styled_df.map(color_pl, subset=["P/L Réalisé"])
     
     st.dataframe(styled_df, use_container_width=True, height=400)
     
