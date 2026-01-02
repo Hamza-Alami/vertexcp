@@ -171,6 +171,26 @@ def show_portfolio(client_name, read_only=False):
         st.dataframe(df_styled, use_container_width=True)
         return
 
+
+    with st.expander("📜 Historique des transactions + TPCVM", expanded=False):
+        tx = db_utils.get_transactions(cid)
+        if tx.empty:
+            st.info("Aucune transaction enregistrée.")
+        else:
+            # colonnes utiles
+            keep = ["executed_at","trade_date","side","symbol","quantity","price","gross_amount","fees","realized_pl","tax_rate_used","tpcvm","net_cash_flow"]
+            tx2 = tx[[c for c in keep if c in tx.columns]].copy()
+    
+            # totals
+            total_tpcvm = float(tx2["tpcvm"].sum()) if "tpcvm" in tx2.columns else 0.0
+            st.write(f"**TPCVM total (historique) : {total_tpcvm:,.2f} MAD**")
+    
+            st.dataframe(
+                tx2.style.format("{:,.2f}", subset=[c for c in tx2.columns if c not in ["executed_at","trade_date","side","symbol"]]),
+                use_container_width=True
+            )
+
+
     # Not read_only => let user edit commissions + buy/sell
     cinfo = get_client_info(client_name)
     if cinfo:
