@@ -32,10 +32,6 @@ def prices_table():
     """Shortcut to the 'market_prices' table (valeur, cours, updated_at)."""
     return get_supabase().table("market_prices")
 
-def transactions_table():
-    """Shortcut to the 'transactions' table."""
-    return get_supabase().table("transactions")
-
 ##################################################
 #               MASI Fetch
 ##################################################
@@ -289,17 +285,11 @@ def fetch_instruments():
 #           Client / Portfolio / Performance
 ##################################################
 
-@st.cache_data(ttl=60)
-def _cached_get_all_clients():
-    """Cached version of get_all_clients."""
+def get_all_clients():
     res = client_table().select("*").execute()
     if not res.data:
         return []
     return [r["name"] for r in res.data]
-
-def get_all_clients():
-    """Get all clients (with cache)."""
-    return _cached_get_all_clients()
 
 def get_client_info(client_name: str):
     res = client_table().select("*").eq("name", client_name).execute()
@@ -360,53 +350,12 @@ def delete_client(cname: str):
     if cid is None:
         st.error("Client introuvable.")
         return
-    
-    # Check if client has portfolio or transactions
     try:
-        portfolio_check = portfolio_table().select("id").eq("client_id", cid).limit(1).execute()
-        has_portfolio = len(portfolio_check.data) > 0
-        
-        transactions_check = transactions_table().select("id").eq("client_id", cid).limit(1).execute()
-        has_transactions = len(transactions_check.data) > 0
-        
-        if has_portfolio or has_transactions:
-            st.warning(f"⚠️ Le client '{cname}' a un portefeuille et/ou des transactions. "
-                      f"La suppression supprimera également toutes les données associées (cascade).")
+        client_table().delete().eq("id", cid).execute()
+        st.success(f"Client '{cname}' supprimé.")
+        st.rerun()
     except Exception as e:
-        st.warning(f"Impossible de vérifier les données associées: {e}")
-    
-    try:
-        # Delete client (cascade should handle related data if foreign keys are set up)
-        result = client_table().delete().eq("id", cid).execute()
-        
-        # Clear cache to ensure fresh data
-        _cached_get_all_clients.clear()
-        
-        # Verify deletion
-        verify = client_table().select("id").eq("id", cid).execute()
-        if len(verify.data) == 0:
-            st.success(f"✅ Client '{cname}' supprimé avec succès.")
-            st.rerun()
-        else:
-            st.error(f"❌ La suppression a échoué. Le client existe toujours.")
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "foreign key" in error_msg or "constraint" in error_msg or "violates" in error_msg:
-            st.error(f"❌ Impossible de supprimer le client '{cname}': des données sont encore liées. "
-                    f"Veuillez d'abord supprimer manuellement le portefeuille et les transactions, "
-                    f"ou configurez les clés étrangères avec ON DELETE CASCADE dans votre base de données.")
-            st.info("💡 Pour activer la suppression en cascade, exécutez dans Supabase SQL Editor:\n"
-                   "```sql\n"
-                   "ALTER TABLE portfolios DROP CONSTRAINT IF EXISTS portfolios_client_id_fkey;\n"
-                   "ALTER TABLE portfolios ADD CONSTRAINT portfolios_client_id_fkey\n"
-                   "  FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE;\n"
-                   "\n"
-                   "ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_client_id_fkey;\n"
-                   "ALTER TABLE transactions ADD CONSTRAINT transactions_client_id_fkey\n"
-                   "  FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE;\n"
-                   "```")
-        else:
-            st.error(f"❌ Erreur lors de la suppression du client: {e}")
+        st.error(f"Erreur lors de la suppression du client: {e}")
 
 def update_client_rates(client_name: str,
                         exchange_comm: float,
@@ -494,95 +443,3 @@ def update_performance_period_rows(old_df: pd.DataFrame, new_df: pd.DataFrame):
             }).eq("id", rec_id).execute()
         except Exception as e:
             st.error(f"Erreur lors de la mise à jour de la ligne id={rec_id}: {e}")
-
-##################################################
-#       Transaction Management
-##################################################
-
-def get_transactions_for_client(client_id: int, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
-    """Get all transactions for a client, optionally filtered by date range."""
-    query = transactions_table().select("*").eq("client_id", client_id).eq("is_deleted", False)
-    
-    if start_date:
-        query = query.gte("trade_date", start_date)
-    if end_date:
-        query = query.lte("trade_date", end_date)
-    
-    res = query.order("executed_at", desc=True).execute()
-    if not res.data:
-        return pd.DataFrame()
-    return pd.DataFrame(res.data)
-
-def get_transaction_by_id(transaction_id: int):
-    """Get a single transaction by ID."""
-    res = transactions_table().select("*").eq("id", transaction_id).execute()
-    if res.data:
-        return res.data[0]
-    return None
-
-def delete_transaction(transaction_id: int):
-    """Soft delete a transaction and restore portfolio to previous state."""
-    transaction = get_transaction_by_id(transaction_id)
-    if not transaction:
-        st.error("Transaction introuvable.")
-        return False
-    
-    if transaction.get("is_deleted", False):
-        st.error("Cette transaction a déjà été supprimée.")
-        return False
-    
-    # Restore portfolio from snapshot_before (using correct field name from DB)
-    snapshot_before = transaction.get("portfolio_snapshot_before")
-    if snapshot_before:
-        try:
-            client_id = transaction["client_id"]
-            # Delete all current portfolio entries for this client
-            portfolio_table().delete().eq("client_id", client_id).execute()
-            
-            # Restore from snapshot
-            if isinstance(snapshot_before, dict):
-                portfolio_rows = []
-                for valeur, data in snapshot_before.items():
-                    portfolio_rows.append({
-                        "client_id": client_id,
-                        "valeur": valeur,
-                        "quantité": float(data.get("quantité", 0)),
-                        "vwap": float(data.get("vwap", 0)),
-                        "cours": 0.0,
-                        "valorisation": 0.0
-                    })
-                if portfolio_rows:
-                    portfolio_table().upsert(portfolio_rows, on_conflict="client_id,valeur").execute()
-        except Exception as e:
-            st.error(f"Erreur lors de la restauration du portefeuille: {e}")
-            return False
-    
-    # Soft delete the transaction
-    try:
-        transactions_table().update({
-            "is_deleted": True,
-            "deleted_at": datetime.utcnow().isoformat()
-        }).eq("id", transaction_id).execute()
-        return True
-    except Exception as e:
-        st.error(f"Erreur lors de la suppression de la transaction: {e}")
-        return False
-
-def calculate_tpcvm_for_client(client_id: int) -> float:
-    """Calculate total paid (TPCVM) for a client from all BUY transactions."""
-    # TPCVM = Total Payé = sum of all costs from BUY transactions
-    # Get all BUY transactions and sum gross_amount + fees
-    res = transactions_table().select("gross_amount, fees, side").eq("client_id", client_id).eq("is_deleted", False).execute()
-    if not res.data:
-        return 0.0
-    
-    # Sum gross_amount + fees for all BUY transactions only
-    total = 0.0
-    for t in res.data:
-        if t.get("side") == "BUY":
-            gross = float(t.get("gross_amount", 0))
-            fees = float(t.get("fees", 0))
-            total += gross + fees
-    
-    return total
-
