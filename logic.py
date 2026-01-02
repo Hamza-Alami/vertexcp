@@ -13,7 +13,6 @@ from db_utils import (
     create_performance_period,
     get_performance_periods_for_client,
     get_latest_performance_period_for_all_clients,
-    transactions_table,
 )
 
 ######################################################
@@ -55,9 +54,9 @@ def compute_poids_masi():
     instr_renamed = instruments_df.rename(columns={"instrument_name": "valeur"})
     merged = pd.merge(instr_renamed, stocks_df, on="valeur", how="left")
 
-    merged["cours"] = pd.to_numeric(merged["cours"], errors='coerce').fillna(0.0)
-    merged["nombre_de_titres"] = pd.to_numeric(merged["nombre_de_titres"], errors='coerce').fillna(0.0)
-    merged["facteur_flottant"] = pd.to_numeric(merged["facteur_flottant"], errors='coerce').fillna(0.0)
+    merged["cours"] = merged["cours"].fillna(0.0).astype(float)
+    merged["nombre_de_titres"] = merged["nombre_de_titres"].fillna(0.0).astype(float)
+    merged["facteur_flottant"] = merged["facteur_flottant"].fillna(0.0).astype(float)
 
     # exclude zero
     merged = merged[(merged["cours"] != 0.0) & (merged["nombre_de_titres"] != 0.0)].copy()
@@ -172,51 +171,7 @@ def new_portfolio_creation_ui(client_name: str):
 #        Buy / Sell
 ######################################################
 
-def _create_portfolio_snapshot(client_name: str) -> dict:
-    """Create a snapshot of the current portfolio state."""
-    dfp = get_portfolio(client_name)
-    if dfp.empty:
-        return {}
-    snapshot = {}
-    for _, row in dfp.iterrows():
-        snapshot[str(row["valeur"])] = {
-            "quantité": float(row.get("quantité", 0)),
-            "vwap": float(row.get("vwap", 0))
-        }
-    return snapshot
-
-def _record_transaction(client_id: int, side: str, symbol: str, quantity: float, price: float,
-                       gross_amount: float, fees: float, tax_rate_used: float, tpcvm: float,
-                       realized_pl: float, net_cash_flow: float, trade_date: str,
-                       snapshot_before: dict, snapshot_after: dict, note: str = None):
-    """Record a transaction in the database. Matches existing transactions table schema."""
-    try:
-        transaction_data = {
-            "client_id": client_id,
-            "side": side,
-            "symbol": symbol,  # Using 'symbol' instead of 'valeur' to match DB
-            "quantity": quantity,
-            "price": price,
-            "gross_amount": gross_amount,
-            "fees": fees,
-            "tax_rate_used": tax_rate_used,
-            "tpcvm": tpcvm,
-            "realized_pl": realized_pl,  # Single realized_pl field
-            "net_cash_flow": net_cash_flow,
-            "trade_date": trade_date,
-            "portfolio_snapshot_before": snapshot_before,  # Using 'portfolio_snapshot_before'
-            "portfolio_snapshot_after": snapshot_after,  # Using 'portfolio_snapshot_after'
-        }
-        if note:
-            transaction_data["note"] = note  # Using 'note' instead of 'notes'
-        transactions_table().insert(transaction_data).execute()
-    except Exception as e:
-        st.error(f"Erreur lors de l'enregistrement de la transaction: {e}")
-
-def buy_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float, trade_date: str = None):
-    from datetime import date
-    import json
-    
+def buy_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Informations du client introuvables.")
@@ -227,12 +182,8 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
         st.error("Client introuvable.")
         return
 
-    # Create snapshot before transaction
-    snapshot_before = _create_portfolio_snapshot(client_name)
-
     dfp = get_portfolio(client_name)
     exchange_rate = float(cinfo.get("exchange_commission_rate") or 0.0)
-    is_pea = bool(cinfo.get("is_pea") or False)
 
     raw_cost = transaction_price * quantity
     commission = raw_cost * (exchange_rate / 100.0)
@@ -279,10 +230,8 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
             st.error(f"Erreur mise à jour stock {stock_name}: {e}")
             return
 
-    # Update Cash - use ORIGINAL cash amount and subtract cost_with_comm
-    # cost_with_comm = raw_cost + commission (includes fees)
+    # Update Cash
     new_cash = current_cash - cost_with_comm
-    
     if cash_match.empty:
         try:
             portfolio_table().upsert([{
@@ -306,55 +255,13 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
             st.error(f"Erreur mise à jour Cash: {e}")
             return
 
-    # Create snapshot after transaction
-    snapshot_after = _create_portfolio_snapshot(client_name)
-
-    # Calculate TPCVM (total paid) - sum of all cost_basis from previous transactions + this one
-    from db_utils import calculate_tpcvm_for_client
-    previous_tpcvm = calculate_tpcvm_for_client(cid)
-    new_tpcvm = previous_tpcvm + cost_with_comm
-
-    # Record transaction
-    try:
-        trade_date_str = trade_date if trade_date else str(date.today())
-        _record_transaction(
-            client_id=cid,
-            side="BUY",
-            symbol=stock_name,  # Using 'symbol' to match DB schema
-            quantity=quantity,
-            price=transaction_price,
-            gross_amount=raw_cost,
-            fees=commission,
-            tax_rate_used=0.0,  # No tax on buy
-            tpcvm=new_tpcvm,
-            realized_pl=0.0,  # No P/L on buy
-            net_cash_flow=-cost_with_comm,  # Negative for buy
-            trade_date=trade_date_str,
-            snapshot_before=snapshot_before,
-            snapshot_after=snapshot_after
-        )
-    except Exception as e:
-        st.warning(f"⚠️ Transaction enregistrée mais erreur lors de la sauvegarde: {e}")
-        # Don't fail the transaction, just warn
-
-    # Show detailed breakdown with verification
-    st.success(f"✅ Achat réussi!")
-    st.info(
-        f"**Détails de l'achat:**\n"
-        f"- Quantité: {quantity:.0f} {stock_name}\n"
-        f"- Prix unitaire: {transaction_price:,.2f} MAD\n"
-        f"- Montant brut: {raw_cost:,.2f} MAD\n"
-        f"- Commission ({exchange_rate}%): {commission:,.2f} MAD\n"
-        f"- **Coût total: {cost_with_comm:,.2f} MAD**\n"
-        f"- **VWAP (inclut commission): {new_vwap if match.empty else new_vwap:,.2f} MAD**\n"
-        f"- Cash avant: {current_cash:,.2f} MAD\n"
-        f"- Cash après: {new_cash:,.2f} MAD"
+    st.success(
+        f"Achat de {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
+        f"coût total {cost_with_comm:,.2f} (commission incluse)."
     )
     st.rerun()
 
-def sell_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float, trade_date: str = None):
-    from datetime import date
-    
+def sell_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Informations du client introuvables.")
@@ -365,50 +272,30 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         st.error("Client introuvable.")
         return
 
-    # Create snapshot before transaction
-    snapshot_before = _create_portfolio_snapshot(client_name)
-
     exchange_rate = float(cinfo.get("exchange_commission_rate") or 0.0)
     tax_rate      = float(cinfo.get("tax_on_gains_rate") or 15.0)
-    is_pea        = bool(cinfo.get("is_pea") or False)
 
-    # Get fresh portfolio data to ensure we have current quantities
     dfp = get_portfolio(client_name)
-    if dfp.empty:
-        st.error(f"Le portefeuille est vide pour ce client.")
-        return
-    
     match = dfp[dfp["valeur"] == stock_name]
     if match.empty:
         st.error(f"Le client ne possède pas {stock_name}.")
         return
 
     old_qty = float(match["quantité"].values[0])
-    if old_qty <= 0:
-        st.error(f"Quantité insuffisante: le client ne possède plus {stock_name}.")
-        return
-        
     if quantity > old_qty:
-        st.error(f"Quantité insuffisante: vous voulez vendre {quantity}, mais le client ne possède que {old_qty}.")
+        st.error(f"Quantité insuffisante: vend {quantity}, possède {old_qty}.")
         return
 
     old_vwap      = float(match["vwap"].values[0])
     raw_proceeds  = transaction_price * quantity
     commission    = raw_proceeds * (exchange_rate / 100.0)
-    
-    # Get original cash amount BEFORE any updates
-    cash_match = dfp[dfp["valeur"] == "Cash"]
-    old_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
+    net_proceeds  = raw_proceeds - commission
 
     cost_of_shares = old_vwap * quantity
-    profit_before_tax = raw_proceeds - commission - cost_of_shares
-    tax = 0.0
-    # PEA accounts are tax-free, so skip tax calculation if is_pea is True
-    if profit_before_tax > 0 and not is_pea:
-        tax = profit_before_tax * (tax_rate / 100.0)
-    
-    # Net proceeds = raw_proceeds - commission - tax
-    net_proceeds = raw_proceeds - commission - tax
+    profit = net_proceeds - cost_of_shares
+    if profit > 0:
+        tax = profit * (tax_rate / 100.0)
+        net_proceeds -= tax
 
     new_qty = old_qty - quantity
     try:
@@ -420,8 +307,9 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         st.error(f"Erreur mise à jour après vente: {e}")
         return
 
-    # Update Cash - use ORIGINAL cash amount and add net_proceeds
-    # net_proceeds = raw_proceeds - commission - tax (already calculated above)
+    # Update Cash
+    cash_match = dfp[dfp["valeur"] == "Cash"]
+    old_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
     new_cash = old_cash + net_proceeds
 
     try:
@@ -443,79 +331,8 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         st.error(f"Erreur mise à jour Cash: {e}")
         return
 
-    # Create snapshot after transaction
-    snapshot_after = _create_portfolio_snapshot(client_name)
-
-    # Calculate TPCVM (total paid) - remains the same for sells (no new cost basis)
-    # TPCVM is only updated on BUY transactions, so we use the current value
-    # For PEA accounts, TPCVM should still track total paid, but tax is 0
-    from db_utils import calculate_tpcvm_for_client
-    current_tpcvm = calculate_tpcvm_for_client(cid)
-
-    # Record transaction - MUST happen after portfolio update
-    try:
-        trade_date_str = trade_date if trade_date else str(date.today())
-        # realized_pl_after_tax = profit_before_tax - tax
-        realized_pl_after_tax = profit_before_tax - tax
-        # Tax rate used: 0 for PEA, otherwise the tax_rate (15% default)
-        tax_rate_used = 0.0 if is_pea else (tax_rate if profit_before_tax > 0 else 0.0)
-        
-        _record_transaction(
-            client_id=cid,
-            side="SELL",
-            symbol=stock_name,  # Using 'symbol' to match DB schema
-            quantity=quantity,
-            price=transaction_price,
-            gross_amount=raw_proceeds,
-            fees=commission,
-            tax_rate_used=tax_rate_used,
-            tpcvm=current_tpcvm,  # TPCVM = total paid, doesn't change on sell
-            realized_pl=realized_pl_after_tax,  # P/L after tax
-            net_cash_flow=net_proceeds,  # Positive for sell
-            trade_date=trade_date_str,
-            snapshot_before=snapshot_before,
-            snapshot_after=snapshot_after
-        )
-    except Exception as e:
-        st.error(f"❌ Erreur lors de l'enregistrement de la transaction: {e}")
-        # Transaction happened but recording failed - this is a problem
-
-    # Show detailed breakdown with verification
-    st.success(f"✅ Vente réussie!")
-    breakdown_text = (
-        f"**Détails de la vente:**\n"
-        f"- Quantité: {quantity:.0f} {stock_name}\n"
-        f"- Prix unitaire: {transaction_price:,.2f} MAD\n"
-        f"- Montant brut: {raw_proceeds:,.2f} MAD\n"
-        f"- Commission ({exchange_rate}%): {commission:,.2f} MAD\n"
-        f"- Coût de base (VWAP × qty): {cost_of_shares:,.2f} MAD (VWAP: {old_vwap:,.2f})\n"
+    st.success(
+        f"Vendu {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
+        f"net {net_proceeds:,.2f} (commission + taxe gains)."
     )
-    
-    if profit_before_tax > 0:
-        breakdown_text += (
-            f"- Profit brut (après commission): {profit_before_tax:,.2f} MAD\n"
-        )
-        if tax > 0:
-            breakdown_text += (
-                f"- Taxe ({tax_rate}%): {tax:,.2f} MAD\n"
-            )
-        else:
-            breakdown_text += (
-                f"- Taxe: 0.00 MAD (Compte PEA - exonéré)\n"
-            )
-        breakdown_text += (
-            f"- **Net reçu: {net_proceeds:,.2f} MAD**\n"
-        )
-    else:
-        breakdown_text += (
-            f"- Perte: {abs(profit_before_tax):,.2f} MAD\n"
-            f"- **Net reçu: {net_proceeds:,.2f} MAD**\n"
-        )
-    
-    breakdown_text += (
-        f"- Cash avant: {old_cash:,.2f} MAD\n"
-        f"- Cash après: {new_cash:,.2f} MAD"
-    )
-    
-    st.info(breakdown_text)
     st.rerun()
