@@ -279,13 +279,11 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
             st.error(f"Erreur mise à jour stock {stock_name}: {e}")
             return
 
-    # Update Cash - get fresh portfolio data after stock update
-    dfp_updated = get_portfolio(client_name)
-    cash_match_updated = dfp_updated[dfp_updated["valeur"] == "Cash"]
-    current_cash_updated = float(cash_match_updated["quantité"].values[0]) if not cash_match_updated.empty else 0.0
-    new_cash = current_cash_updated - cost_with_comm
+    # Update Cash - use ORIGINAL cash amount and subtract cost_with_comm
+    # cost_with_comm = raw_cost + commission (includes fees)
+    new_cash = current_cash - cost_with_comm
     
-    if cash_match_updated.empty:
+    if cash_match.empty:
         try:
             portfolio_table().upsert([{
                 "client_id": cid,
@@ -394,15 +392,20 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     old_vwap      = float(match["vwap"].values[0])
     raw_proceeds  = transaction_price * quantity
     commission    = raw_proceeds * (exchange_rate / 100.0)
-    net_proceeds  = raw_proceeds - commission
+    
+    # Get original cash amount BEFORE any updates
+    cash_match = dfp[dfp["valeur"] == "Cash"]
+    old_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
 
     cost_of_shares = old_vwap * quantity
-    profit = net_proceeds - cost_of_shares
+    profit_before_tax = raw_proceeds - commission - cost_of_shares
     tax = 0.0
     # PEA accounts are tax-free, so skip tax calculation if is_pea is True
-    if profit > 0 and not is_pea:
-        tax = profit * (tax_rate / 100.0)
-        net_proceeds -= tax
+    if profit_before_tax > 0 and not is_pea:
+        tax = profit_before_tax * (tax_rate / 100.0)
+    
+    # Net proceeds = raw_proceeds - commission - tax
+    net_proceeds = raw_proceeds - commission - tax
 
     new_qty = old_qty - quantity
     try:
@@ -414,10 +417,8 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         st.error(f"Erreur mise à jour après vente: {e}")
         return
 
-    # Update Cash - get fresh portfolio data after stock update
-    dfp_updated = get_portfolio(client_name)
-    cash_match = dfp_updated[dfp_updated["valeur"] == "Cash"]
-    old_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
+    # Update Cash - use ORIGINAL cash amount and add net_proceeds
+    # net_proceeds = raw_proceeds - commission - tax (already calculated above)
     new_cash = old_cash + net_proceeds
 
     try:
@@ -451,9 +452,10 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
     # Record transaction - MUST happen after portfolio update
     try:
         trade_date_str = trade_date if trade_date else str(date.today())
-        realized_pl_after_tax = profit - tax
+        # realized_pl_after_tax = profit_before_tax - tax
+        realized_pl_after_tax = profit_before_tax - tax
         # Tax rate used: 0 for PEA, otherwise the tax_rate (15% default)
-        tax_rate_used = 0.0 if is_pea else (tax_rate if profit > 0 else 0.0)
+        tax_rate_used = 0.0 if is_pea else (tax_rate if profit_before_tax > 0 else 0.0)
         
         _record_transaction(
             client_id=cid,
@@ -485,9 +487,9 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         f"- Commission ({exchange_rate}%): {commission:,.2f} MAD\n"
     )
     
-    if profit > 0:
+    if profit_before_tax > 0:
         breakdown_text += (
-            f"- Profit brut: {profit:,.2f} MAD\n"
+            f"- Profit brut (après commission): {profit_before_tax:,.2f} MAD\n"
         )
         if tax > 0:
             breakdown_text += (
@@ -502,7 +504,7 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         )
     else:
         breakdown_text += (
-            f"- Perte: {abs(profit):,.2f} MAD\n"
+            f"- Perte: {abs(profit_before_tax):,.2f} MAD\n"
             f"- **Net reçu: {net_proceeds:,.2f} MAD**"
         )
     
