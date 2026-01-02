@@ -585,3 +585,4 @@ def calculate_tpcvm_for_client(client_id: int) -> float:
             total += gross + fees
     
     return total
+
