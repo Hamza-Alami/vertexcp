@@ -1,6 +1,3 @@
-import json
-from datetime import date
-
 import streamlit as st
 import pandas as pd
 
@@ -13,26 +10,33 @@ from db_utils import (
     fetch_instruments,
     fetch_stocks,
     client_has_portfolio,
+    create_performance_period,
+    get_performance_periods_for_client,
+    get_latest_performance_period_for_all_clients,
+    transactions_table,
 )
 
-
 ######################################################
-#     Real-time MASI Fetch (safe)
+#     Real-time MASI Fetch
 ######################################################
 
 def get_current_masi():
+    """Return the real-time MASI index from Casablanca Bourse."""
     try:
-        return float(db_utils.fetch_masi_from_cb())
+        return db_utils.fetch_masi_from_cb()
     except Exception as e:
         st.error(f"Erreur récupération MASI: {e}")
         return 0.0
 
-
 ######################################################
-#  Poids MASI
+#  Compute Poids Masi for each "valeur"
 ######################################################
 
 def compute_poids_masi():
+    """
+    Creates a dictionary { valeur: {"capitalisation": X, "poids_masi": Y}, ... }
+    by merging instruments + stocks => capitalisation => floated_cap => sum => percentage.
+    """
     try:
         instruments_df = fetch_instruments()
     except Exception as e:
@@ -55,12 +59,12 @@ def compute_poids_masi():
     merged["nombre_de_titres"] = merged["nombre_de_titres"].fillna(0.0).astype(float)
     merged["facteur_flottant"] = merged["facteur_flottant"].fillna(0.0).astype(float)
 
+    # exclude zero
     merged = merged[(merged["cours"] != 0.0) & (merged["nombre_de_titres"] != 0.0)].copy()
 
     merged["capitalisation"] = merged["cours"] * merged["nombre_de_titres"]
-    merged["floated_cap"] = merged["capitalisation"] * merged["facteur_flottant"]
+    merged["floated_cap"]    = merged["capitalisation"] * merged["facteur_flottant"]
     tot_floated = merged["floated_cap"].sum()
-
     if tot_floated <= 0:
         merged["poids_masi"] = 0.0
     else:
@@ -70,22 +74,29 @@ def compute_poids_masi():
     for _, row in merged.iterrows():
         val = row["valeur"]
         outdict[val] = {
-            "capitalisation": float(row["capitalisation"]),
-            "poids_masi": float(row["poids_masi"])
+            "capitalisation": row["capitalisation"],
+            "poids_masi": row["poids_masi"]
         }
     return outdict
 
 
+# ❌ Removed the heavy query at import time
+# poids_masi_map = compute_poids_masi()
+
+# ✅ Replace with cached function to load lazily
 @st.cache_data(ttl=300)
 def get_poids_masi_map():
     return compute_poids_masi()
-
 
 ######################################################
 #   Create a brand-new portfolio
 ######################################################
 
 def create_portfolio_rows(client_name: str, holdings: dict):
+    """
+    Upserts rows (valeur -> quantity) into 'portfolios' if the client has no portfolio.
+    If they do, we do a warning.
+    """
     cid = get_client_id(client_name)
     if cid is None:
         st.error("Client not found.")
@@ -97,7 +108,7 @@ def create_portfolio_rows(client_name: str, holdings: dict):
 
     rows = []
     for stock, qty in holdings.items():
-        if float(qty) > 0:
+        if qty > 0:
             rows.append({
                 "client_id": cid,
                 "valeur": str(stock),
@@ -118,8 +129,10 @@ def create_portfolio_rows(client_name: str, holdings: dict):
     except Exception as e:
         st.error(f"Erreur création du portefeuille: {e}")
 
-
 def new_portfolio_creation_ui(client_name: str):
+    """
+    Lets the user pick stocks/cash to add to a brand-new portfolio via st.session_state.
+    """
     st.subheader(f"➕ Définir les actifs initiaux pour {client_name}")
 
     if "temp_holdings" not in st.session_state:
@@ -131,19 +144,10 @@ def new_portfolio_creation_ui(client_name: str):
         st.error(f"Erreur chargement stocks: {e}")
         return
 
-    options = all_stocks["valeur"].tolist()
-    if "Cash" not in options:
-        options = options + ["Cash"]
-
-    chosen_val = st.selectbox(
-        "Choisir une valeur",
-        options,
-        key=f"new_stock_{client_name}"
-    )
-
+    chosen_val = st.selectbox(f"Choisir une valeur ou 'Cash'", all_stocks["valeur"].tolist(), key=f"new_stock_{client_name}")
     qty = st.number_input(
         f"Quantité pour {client_name}",
-        min_value=0.0,
+        min_value=1.0,
         value=1.0,
         step=1.0,
         key=f"new_qty_{client_name}"
@@ -164,12 +168,55 @@ def new_portfolio_creation_ui(client_name: str):
             create_portfolio_rows(client_name, st.session_state.temp_holdings)
             del st.session_state.temp_holdings
 
-
 ######################################################
-#        Buy / Sell + Transactions log (TPCVM)
+#        Buy / Sell
 ######################################################
 
-def buy_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
+def _create_portfolio_snapshot(client_name: str) -> dict:
+    """Create a snapshot of the current portfolio state."""
+    dfp = get_portfolio(client_name)
+    if dfp.empty:
+        return {}
+    snapshot = {}
+    for _, row in dfp.iterrows():
+        snapshot[str(row["valeur"])] = {
+            "quantité": float(row.get("quantité", 0)),
+            "vwap": float(row.get("vwap", 0))
+        }
+    return snapshot
+
+def _record_transaction(client_id: int, side: str, symbol: str, quantity: float, price: float,
+                       gross_amount: float, fees: float, tax_rate_used: float, tpcvm: float,
+                       realized_pl: float, net_cash_flow: float, trade_date: str,
+                       snapshot_before: dict, snapshot_after: dict, note: str = None):
+    """Record a transaction in the database. Matches existing transactions table schema."""
+    try:
+        transaction_data = {
+            "client_id": client_id,
+            "side": side,
+            "symbol": symbol,  # Using 'symbol' instead of 'valeur' to match DB
+            "quantity": quantity,
+            "price": price,
+            "gross_amount": gross_amount,
+            "fees": fees,
+            "tax_rate_used": tax_rate_used,
+            "tpcvm": tpcvm,
+            "realized_pl": realized_pl,  # Single realized_pl field
+            "net_cash_flow": net_cash_flow,
+            "trade_date": trade_date,
+            "portfolio_snapshot_before": snapshot_before,  # Using 'portfolio_snapshot_before'
+            "portfolio_snapshot_after": snapshot_after,  # Using 'portfolio_snapshot_after'
+        }
+        if note:
+            transaction_data["note"] = note  # Using 'note' instead of 'notes'
+        transactions_table().insert(transaction_data).execute()
+    except Exception as e:
+        st.error(f"Erreur lors de l'enregistrement de la transaction: {e}")
+
+def buy_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float, trade_date: str = None):
+    from datetime import date
+    import json
+    
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Informations du client introuvables.")
@@ -180,30 +227,35 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
         st.error("Client introuvable.")
         return
 
+    # Create snapshot before transaction
+    snapshot_before = _create_portfolio_snapshot(client_name)
+
     dfp = get_portfolio(client_name)
-    snap_before = dfp.to_dict(orient="records") if not dfp.empty else []
-
     exchange_rate = float(cinfo.get("exchange_commission_rate") or 0.0)
+    is_pea = bool(cinfo.get("is_pea") or False)
 
-    raw_cost = float(transaction_price) * float(quantity)
+    raw_cost = transaction_price * quantity
     commission = raw_cost * (exchange_rate / 100.0)
     cost_with_comm = raw_cost + commission
 
-    cash_match = dfp[dfp["valeur"].astype(str) == "Cash"]
+    # Check Cash
+    cash_match = dfp[dfp["valeur"] == "Cash"]
     current_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
     if cost_with_comm > current_cash:
         st.error(f"Montant insuffisant en Cash: {current_cash:,.2f} < {cost_with_comm:,.2f}")
         return
 
-    match = dfp[dfp["valeur"].astype(str) == stock_name]
+    # Check if stock exists
+    match = dfp[dfp["valeur"] == stock_name]
     if match.empty:
-        new_vwap = cost_with_comm / float(quantity) if quantity > 0 else 0.0
+        # Insert new
+        new_vwap = cost_with_comm / quantity
         try:
             portfolio_table().upsert([{
                 "client_id": cid,
                 "valeur": stock_name,
-                "quantité": float(quantity),
-                "vwap": float(new_vwap),
+                "quantité": quantity,
+                "vwap": new_vwap,
                 "cours": 0.0,
                 "valorisation": 0.0
             }], on_conflict="client_id,valeur").execute()
@@ -211,66 +263,83 @@ def buy_shares(client_name: str, stock_name: str, transaction_price: float, quan
             st.error(f"Erreur lors de l'ajout de {stock_name}: {e}")
             return
     else:
+        # update
         old_qty = float(match["quantité"].values[0])
         old_vwap = float(match["vwap"].values[0])
         old_cost = old_qty * old_vwap
         new_cost = old_cost + cost_with_comm
-        new_qty = old_qty + float(quantity)
+        new_qty = old_qty + quantity
         new_vwap = new_cost / new_qty if new_qty > 0 else 0.0
         try:
             portfolio_table().update({
-                "quantité": float(new_qty),
-                "vwap": float(new_vwap)
+                "quantité": new_qty,
+                "vwap": new_vwap
             }).eq("client_id", cid).eq("valeur", stock_name).execute()
         except Exception as e:
             st.error(f"Erreur mise à jour stock {stock_name}: {e}")
             return
 
+    # Update Cash
     new_cash = current_cash - cost_with_comm
-    try:
-        portfolio_table().upsert([{
-            "client_id": cid,
-            "valeur": "Cash",
-            "quantité": float(new_cash),
-            "vwap": 1.0,
-            "cours": 0.0,
-            "valorisation": 0.0
-        }], on_conflict="client_id,valeur").execute()
-    except Exception as e:
-        st.error(f"Erreur mise à jour Cash: {e}")
-        return
+    if cash_match.empty:
+        try:
+            portfolio_table().upsert([{
+                "client_id": cid,
+                "valeur": "Cash",
+                "quantité": new_cash,
+                "vwap": 1.0,
+                "cours": 0.0,
+                "valorisation": 0.0
+            }], on_conflict="client_id,valeur").execute()
+        except Exception as e:
+            st.error(f"Erreur insertion Cash: {e}")
+            return
+    else:
+        try:
+            portfolio_table().update({
+                "quantité": new_cash,
+                "vwap": 1.0
+            }).eq("client_id", cid).eq("valeur", "Cash").execute()
+        except Exception as e:
+            st.error(f"Erreur mise à jour Cash: {e}")
+            return
 
-    dfp_after = get_portfolio(client_name)
-    snap_after = dfp_after.to_dict(orient="records") if not dfp_after.empty else []
+    # Create snapshot after transaction
+    snapshot_after = _create_portfolio_snapshot(client_name)
 
-    try:
-        db_utils.log_transaction({
-            "client_id": cid,
-            "trade_date": str(date.today()),
-            "side": "BUY",
-            "symbol": stock_name,
-            "quantity": float(quantity),
-            "price": float(transaction_price),
-            "gross_amount": float(raw_cost),
-            "fees": float(commission),
-            "tax_rate_used": 0.0,
-            "tpcvm": 0.0,
-            "realized_pl": 0.0,
-            "net_cash_flow": float(-cost_with_comm),
-            "portfolio_snapshot_before": json.dumps(snap_before),
-            "portfolio_snapshot_after": json.dumps(snap_after),
-        })
-    except Exception as e:
-        st.warning(f"Achat OK mais log transaction impossible: {e}")
+    # Calculate TPCVM (total paid) - sum of all cost_basis from previous transactions + this one
+    from db_utils import calculate_tpcvm_for_client
+    previous_tpcvm = calculate_tpcvm_for_client(cid)
+    new_tpcvm = previous_tpcvm + cost_with_comm
+
+    # Record transaction
+    trade_date_str = trade_date if trade_date else str(date.today())
+    _record_transaction(
+        client_id=cid,
+        side="BUY",
+        symbol=stock_name,  # Using 'symbol' to match DB schema
+        quantity=quantity,
+        price=transaction_price,
+        gross_amount=raw_cost,
+        fees=commission,
+        tax_rate_used=0.0,  # No tax on buy
+        tpcvm=new_tpcvm,
+        realized_pl=0.0,  # No P/L on buy
+        net_cash_flow=-cost_with_comm,  # Negative for buy
+        trade_date=trade_date_str,
+        snapshot_before=snapshot_before,
+        snapshot_after=snapshot_after
+    )
 
     st.success(
-        f"Achat {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f} | "
-        f"Total {cost_with_comm:,.2f} (comm: {commission:,.2f})."
+        f"Achat de {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
+        f"coût total {cost_with_comm:,.2f} (commission incluse)."
     )
     st.rerun()
 
-
-def sell_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float):
+def sell_shares(client_name: str, stock_name: str, transaction_price: float, quantity: float, trade_date: str = None):
+    from datetime import date
+    
     cinfo = get_client_info(client_name)
     if not cinfo:
         st.error("Informations du client introuvables.")
@@ -281,88 +350,103 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         st.error("Client introuvable.")
         return
 
-    dfp = get_portfolio(client_name)
-    snap_before = dfp.to_dict(orient="records") if not dfp.empty else []
+    # Create snapshot before transaction
+    snapshot_before = _create_portfolio_snapshot(client_name)
 
     exchange_rate = float(cinfo.get("exchange_commission_rate") or 0.0)
-    tax_rate_cfg = float(cinfo.get("tax_on_gains_rate") or 15.0)
-    is_pea = bool(cinfo.get("is_pea") or False)
+    tax_rate      = float(cinfo.get("tax_on_gains_rate") or 15.0)
+    is_pea        = bool(cinfo.get("is_pea") or False)
 
-    match = dfp[dfp["valeur"].astype(str) == stock_name]
+    dfp = get_portfolio(client_name)
+    match = dfp[dfp["valeur"] == stock_name]
     if match.empty:
         st.error(f"Le client ne possède pas {stock_name}.")
         return
 
     old_qty = float(match["quantité"].values[0])
-    if float(quantity) > old_qty:
+    if quantity > old_qty:
         st.error(f"Quantité insuffisante: vend {quantity}, possède {old_qty}.")
         return
 
-    old_vwap = float(match["vwap"].values[0])
+    old_vwap      = float(match["vwap"].values[0])
+    raw_proceeds  = transaction_price * quantity
+    commission    = raw_proceeds * (exchange_rate / 100.0)
+    net_proceeds  = raw_proceeds - commission
 
-    raw_proceeds = float(transaction_price) * float(quantity)
-    commission = raw_proceeds * (exchange_rate / 100.0)
-    net_before_tax = raw_proceeds - commission
+    cost_of_shares = old_vwap * quantity
+    profit = net_proceeds - cost_of_shares
+    tax = 0.0
+    # PEA accounts are tax-free, so skip tax calculation if is_pea is True
+    if profit > 0 and not is_pea:
+        tax = profit * (tax_rate / 100.0)
+        net_proceeds -= tax
 
-    cost_basis = old_vwap * float(quantity)
-    profit = net_before_tax - cost_basis  # profit réalisé AVANT taxe
-
-    tax_rate_used = 0.0 if is_pea else float(tax_rate_cfg)
-    tpcvm = max(0.0, profit) * (tax_rate_used / 100.0)
-    net_after_tax = net_before_tax - tpcvm
-
-    new_qty = old_qty - float(quantity)
+    new_qty = old_qty - quantity
     try:
         if new_qty <= 0:
             portfolio_table().delete().eq("client_id", cid).eq("valeur", stock_name).execute()
         else:
-            portfolio_table().update({"quantité": float(new_qty)}).eq("client_id", cid).eq("valeur", stock_name).execute()
+            portfolio_table().update({"quantité": new_qty}).eq("client_id", cid).eq("valeur", stock_name).execute()
     except Exception as e:
         st.error(f"Erreur mise à jour après vente: {e}")
         return
 
-    cash_match = dfp[dfp["valeur"].astype(str) == "Cash"]
+    # Update Cash
+    cash_match = dfp[dfp["valeur"] == "Cash"]
     old_cash = float(cash_match["quantité"].values[0]) if not cash_match.empty else 0.0
-    new_cash = old_cash + net_after_tax
+    new_cash = old_cash + net_proceeds
 
     try:
-        portfolio_table().upsert([{
-            "client_id": cid,
-            "valeur": "Cash",
-            "quantité": float(new_cash),
-            "vwap": 1.0,
-            "cours": 0.0,
-            "valorisation": 0.0
-        }], on_conflict="client_id,valeur").execute()
+        if cash_match.empty:
+            portfolio_table().upsert([{
+                "client_id": cid,
+                "valeur": "Cash",
+                "quantité": new_cash,
+                "vwap": 1.0,
+                "cours": 0.0,
+                "valorisation": 0.0
+            }], on_conflict="client_id,valeur").execute()
+        else:
+            portfolio_table().update({
+                "quantité": new_cash,
+                "vwap": 1.0
+            }).eq("client_id", cid).eq("valeur", "Cash").execute()
     except Exception as e:
         st.error(f"Erreur mise à jour Cash: {e}")
         return
 
-    dfp_after = get_portfolio(client_name)
-    snap_after = dfp_after.to_dict(orient="records") if not dfp_after.empty else []
+    # Create snapshot after transaction
+    snapshot_after = _create_portfolio_snapshot(client_name)
 
-    try:
-        db_utils.log_transaction({
-            "client_id": cid,
-            "trade_date": str(date.today()),
-            "side": "SELL",
-            "symbol": stock_name,
-            "quantity": float(quantity),
-            "price": float(transaction_price),
-            "gross_amount": float(raw_proceeds),
-            "fees": float(commission),
-            "tax_rate_used": float(tax_rate_used),
-            "tpcvm": float(tpcvm),
-            "realized_pl": float(profit),
-            "net_cash_flow": float(net_after_tax),
-            "portfolio_snapshot_before": json.dumps(snap_before),
-            "portfolio_snapshot_after": json.dumps(snap_after),
-        })
-    except Exception as e:
-        st.warning(f"Vente OK mais log transaction impossible: {e}")
+    # Calculate TPCVM (total paid) - remains the same for sells (no new cost basis)
+    # TPCVM is only updated on BUY transactions, so we use the current value
+    from db_utils import calculate_tpcvm_for_client
+    current_tpcvm = calculate_tpcvm_for_client(cid)
+
+    # Record transaction
+    trade_date_str = trade_date if trade_date else str(date.today())
+    realized_pl_after_tax = profit - tax
+    tax_rate_used = tax_rate if (profit > 0 and not is_pea) else 0.0
+    
+    _record_transaction(
+        client_id=cid,
+        side="SELL",
+        symbol=stock_name,  # Using 'symbol' to match DB schema
+        quantity=quantity,
+        price=transaction_price,
+        gross_amount=raw_proceeds,
+        fees=commission,
+        tax_rate_used=tax_rate_used,
+        tpcvm=current_tpcvm,
+        realized_pl=realized_pl_after_tax,  # Using single realized_pl field
+        net_cash_flow=net_proceeds,  # Positive for sell
+        trade_date=trade_date_str,
+        snapshot_before=snapshot_before,
+        snapshot_after=snapshot_after
+    )
 
     st.success(
-        f"Vendu {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f} | "
-        f"Net {net_after_tax:,.2f} (comm: {commission:,.2f}, TPCVM: {tpcvm:,.2f})."
+        f"Vendu {quantity:.0f} '{stock_name}' @ {transaction_price:,.2f}, "
+        f"net {net_proceeds:,.2f} (commission + taxe gains)."
     )
     st.rerun()
