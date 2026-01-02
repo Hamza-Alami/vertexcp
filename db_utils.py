@@ -443,3 +443,20 @@ def update_performance_period_rows(old_df: pd.DataFrame, new_df: pd.DataFrame):
             }).eq("id", rec_id).execute()
         except Exception as e:
             st.error(f"Erreur lors de la mise à jour de la ligne id={rec_id}: {e}")
+
+def transactions_table():
+    return get_supabase().table("transactions")
+
+def log_transaction(row: dict):
+    """Insert one transaction row in Supabase."""
+    return transactions_table().insert(row).execute()
+
+def get_transactions(client_id: int | None = None):
+    """Return transactions as DataFrame (optionally filtered by client)."""
+    q = transactions_table().select("*").order("executed_at", desc=True)
+    if client_id is not None:
+        q = q.eq("client_id", client_id)
+    res = q.execute()
+    if not res.data:
+        return pd.DataFrame()
+    return pd.DataFrame(res.data)
