@@ -706,4 +706,25 @@ def page_taxes_tpcvm():
     st.subheader("Exporter")
     csv = view.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Télécharger CSV", csv, file_name="tpcvm_taxes.csv", mime="text/csv")
+    # ============================
+# EXPORT PAGE: Strategies & Simulation
+# ============================
+
+def page_strategies_and_simulation():
+    st.title("Stratégies et Simulation")
+    tabs = st.tabs(["Gestion des Stratégies", "Assignation aux Clients", "Simulation de Stratégie"])
+
+    # --- Tab 0: Gestion des Stratégies ---
+    with tabs[0]:
+        # ⚠️ Mets ici TON code existant (celui que tu as déjà dans la conversation)
+        st.info("TODO: coller le contenu existant de ta page stratégies ici")
+
+    # --- Tab 1: Assignation ---
+    with tabs[1]:
+        st.info("TODO: coller le contenu existant assignation ici")
+
+    # --- Tab 2: Simulation ---
+    with tabs[2]:
+        st.info("TODO: coller le contenu existant simulation ici")
+
 
