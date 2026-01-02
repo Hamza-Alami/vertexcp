@@ -56,8 +56,15 @@ def page_manage_clients():
 
         with st.form("delete_client_form", clear_on_submit=True):
             delete_choice = st.selectbox("Sélectionner le client à supprimer", options=existing, key="delete_choice")
-            if st.form_submit_button("🗑️ Supprimer ce client"):
-                delete_client(delete_choice)
+            confirm_delete = st.checkbox(
+                f"⚠️ Je confirme vouloir supprimer le client '{delete_choice}' (cette action est irréversible)",
+                key="confirm_delete_client"
+            )
+            if st.form_submit_button("🗑️ Supprimer ce client", disabled=not confirm_delete):
+                if confirm_delete:
+                    delete_client(delete_choice)
+                else:
+                    st.warning("Veuillez cocher la case de confirmation pour supprimer le client.")
 
 
 ########################################
@@ -1288,13 +1295,27 @@ def page_transactions():
             key="delete_trans_select"
         )
         
-        if st.button("🗑️ Supprimer cette transaction", key="delete_trans_btn"):
+        if selected_trans_idx is not None and selected_trans_idx < len(trans_display):
             selected_trans_id = trans_ids[selected_trans_idx]
-            if delete_transaction(selected_trans_id):
-                st.success("Transaction supprimée et portefeuille restauré avec succès!")
-                st.rerun()
-            else:
-                st.error("Erreur lors de la suppression de la transaction.")
+            selected_trans_info = trans_display[selected_trans_idx]
+            
+            st.warning(f"⚠️ Transaction sélectionnée: **{selected_trans_info}**")
+            st.info("ℹ️ La suppression restaurera le portefeuille à l'état d'avant cette transaction.")
+            
+            confirm_delete_trans = st.checkbox(
+                "⚠️ Je confirme vouloir supprimer cette transaction (cette action est irréversible)",
+                key="confirm_delete_transaction"
+            )
+            
+            if st.button("🗑️ Supprimer cette transaction", key="delete_trans_btn", disabled=not confirm_delete_trans):
+                if confirm_delete_trans:
+                    if delete_transaction(selected_trans_id):
+                        st.success("✅ Transaction supprimée et portefeuille restauré avec succès!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Erreur lors de la suppression de la transaction.")
+                else:
+                    st.warning("Veuillez cocher la case de confirmation pour supprimer la transaction.")
     
     # Style the dataframe
     numeric_cols = df_display.select_dtypes(include=["float64", "int64"]).columns
