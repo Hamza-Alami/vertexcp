@@ -177,8 +177,10 @@ def show_portfolio(client_name, read_only=False):
         with st.expander(f"Modifier Commissions / Taxes / Frais pour {client_name}", expanded=False):
             exch = float(cinfo.get("exchange_commission_rate") or 0.0)
             mgf  = float(cinfo.get("management_fee_rate") or 0.0)
-            pea  = bool(cinfo.get("is_pea") or False)
-            tax  = float(cinfo.get("tax_on_gains_rate") or 15.0)
+            pea = bool(cinfo.get("is_pea") or False)
+            tax_db = cinfo.get("tax_on_gains_rate")
+            tax_default = 15.0 if tax_db in (None, "") else float(tax_db)
+            tax = 0.0 if pea else tax_default
             bill_surf = bool(cinfo.get("bill_surperformance", False))
 
             new_exch = st.number_input(
