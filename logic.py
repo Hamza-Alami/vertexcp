@@ -273,7 +273,10 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
         return
 
     exchange_rate = float(cinfo.get("exchange_commission_rate") or 0.0)
-    tax_rate      = float(cinfo.get("tax_on_gains_rate") or 15.0)
+    
+    # ✅ PEA clients do NOT pay TPCVM
+    is_pea = bool(cinfo.get("is_pea") or False)
+    tax_rate = 0.0 if is_pea else float(cinfo.get("tax_on_gains_rate") or 15.0)
 
     dfp = get_portfolio(client_name)
     match = dfp[dfp["valeur"] == stock_name]
@@ -293,7 +296,7 @@ def sell_shares(client_name: str, stock_name: str, transaction_price: float, qua
 
     cost_of_shares = old_vwap * quantity
     profit = net_proceeds - cost_of_shares
-    if profit > 0:
+    if profit > 0 and tax_rate > 0:
         tax = profit * (tax_rate / 100.0)
         net_proceeds -= tax
 
