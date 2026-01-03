@@ -190,7 +190,13 @@ def show_portfolio(client_name, read_only=False):
                 "Frais de gestion (%)", min_value=0.0, value=mgf, step=0.01
             )
             new_pea  = st.checkbox("Compte PEA ?", value=pea)
-            new_tax  = st.number_input("Taux d'imposition sur les gains (%)", min_value=0.0, value=tax, step=0.01)
+            new_tax = st.number_input(
+                "Taux d'imposition sur les gains (%)",
+                min_value=0.0,
+                value=0.0 if new_pea else tax,
+                step=0.01,
+                disabled=new_pea
+            )
             new_bill = st.checkbox("Facturer Surperformance ?", value=bill_surf)
 
             if st.button(f"Mettre à jour les paramètres pour {client_name}"):
