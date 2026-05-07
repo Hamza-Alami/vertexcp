@@ -42,33 +42,78 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 def fetch_masi_from_cb() -> float:
     """
     Fetch MASI index from Casablanca Bourse API.
-    Tries with SSL verification first; if it fails, retries without verification.
+    Uses browser-like headers and retries with/without SSL verification.
     """
+
     url = "https://www.casablanca-bourse.com/api/proxy/fr/api/bourse/dashboard/grouped_index_watch?"
 
-    for verify_mode in (certifi.where(), False):  # secure first, then fallback
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+        "Referer": "https://www.casablanca-bourse.com/",
+        "Connection": "keep-alive",
+    }
+
+    session = requests.Session()
+
+    for verify_mode in (certifi.where(), False):
         try:
-            r = requests.get(url, timeout=10, verify=verify_mode)
-            r.raise_for_status()
-            data = r.json()
+            response = session.get(
+                url,
+                headers=headers,
+                timeout=20,
+                verify=verify_mode,
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
 
             for block in data.get("data", []):
                 title = (block.get("title") or "").strip().lower()
+
                 if "principaux" in title and "indice" in title:
+
                     for item in block.get("items", []):
+
                         if (item.get("index") or "").strip().upper() == "MASI":
-                            val_str = str(item.get("field_index_value", "0"))
-                            val_str = val_str.replace(" ", "").replace(",", ".")
+
+                            val_str = str(
+                                item.get("field_index_value", "0")
+                            )
+
+                            val_str = (
+                                val_str
+                                .replace(" ", "")
+                                .replace(",", ".")
+                            )
+
                             try:
                                 return float(val_str)
                             except ValueError:
                                 return 0.0
+
             return 0.0
 
+        except requests.exceptions.SSLError:
+            continue
+
         except Exception as e:
+
             if verify_mode is False:
-                st.error(f"❌ Still cannot fetch MASI index: {e}")
+                st.warning(f"⚠️ MASI API unavailable: {e}")
+
+                # Optional fallback:
+                # return last stored MASI value from Supabase
+
                 return 0.0
+
+    return 0.0
             continue
 
 ##################################################
