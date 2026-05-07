@@ -62,6 +62,7 @@ def fetch_masi_from_cb() -> float:
     session = requests.Session()
 
     for verify_mode in (certifi.where(), False):
+
         try:
             response = session.get(
                 url,
@@ -75,13 +76,19 @@ def fetch_masi_from_cb() -> float:
             data = response.json()
 
             for block in data.get("data", []):
+
                 title = (block.get("title") or "").strip().lower()
 
                 if "principaux" in title and "indice" in title:
 
                     for item in block.get("items", []):
 
-                        if (item.get("index") or "").strip().upper() == "MASI":
+                        if (
+                            (item.get("index") or "")
+                            .strip()
+                            .upper()
+                            == "MASI"
+                        ):
 
                             val_str = str(
                                 item.get("field_index_value", "0")
@@ -95,6 +102,7 @@ def fetch_masi_from_cb() -> float:
 
                             try:
                                 return float(val_str)
+
                             except ValueError:
                                 return 0.0
 
@@ -107,16 +115,10 @@ def fetch_masi_from_cb() -> float:
 
             if verify_mode is False:
                 st.warning(f"⚠️ MASI API unavailable: {e}")
-
-                # Optional fallback:
-                # return last stored MASI value from Supabase
-
                 return 0.0
 
     return 0.0
-            continue
-
-##################################################
+    ######################
 #       Fetching Stocks (Scrape + Supabase Cache)
 ##################################################
 
