@@ -21,6 +21,7 @@ from db_utils import (
     get_latest_performance_period_for_all_clients,
     fetch_stocks,
     lookup_stock_price,
+    canonical_valeur,
 )
 from logic import (
     buy_shares,
@@ -744,6 +745,88 @@ def assign_strategy_to_client(client_name, strategy_id):
 # SIMULATION FUNCTIONS AND HELPERS
 ########################################
 
+def _collect_simulation_assets(portfolio_df, targets, stocks_df):
+    """
+    Build a unified asset map for simulations.
+    Merges portfolio holdings and strategy targets under canonical names
+    so tickers (ADH) and labels (Addoha) resolve to the same price/qty bucket.
+    """
+    assets = {}
+    stocks_df = fetch_stocks() if stocks_df is None else stocks_df
+
+    if portfolio_df is not None and not portfolio_df.empty:
+        for _, row in portfolio_df.iterrows():
+            raw = str(row["valeur"])
+            asset = canonical_valeur(raw)
+            qty = float(row.get("quantité", 0))
+            price = lookup_stock_price(raw, stocks_df)
+            if asset in assets:
+                assets[asset]["qty"] += qty
+                if assets[asset]["price"] == 0 and price > 0:
+                    assets[asset]["price"] = price
+            else:
+                assets[asset] = {"qty": qty, "price": price}
+
+    for raw in (targets or {}).keys():
+        if str(raw).lower() == "cash":
+            continue
+        asset = canonical_valeur(raw)
+        price = lookup_stock_price(raw, stocks_df)
+        if asset in assets:
+            if assets[asset]["price"] == 0 and price > 0:
+                assets[asset]["price"] = price
+        else:
+            assets[asset] = {"qty": 0.0, "price": price}
+
+    return assets
+
+
+def _build_simulation_table(portfolio_assets, targets, total_val):
+    """Render simulation rows with live prices and target weights."""
+    sim_rows = []
+    assets_ordered = [
+        a for a in portfolio_assets if a.lower() != "cash"
+    ] + (["Cash"] if "Cash" in portfolio_assets else [])
+
+    for asset in assets_ordered:
+        current_qty = portfolio_assets[asset]["qty"]
+        price = round(float(portfolio_assets[asset]["price"]), 2)
+        current_value = current_qty * price
+        current_weight = (current_value / total_val * 100) if total_val > 0 else 0
+
+        if asset.lower() == "cash":
+            target_pct = 100 - sum(
+                v for k, v in (targets or {}).items() if str(k).lower() != "cash"
+            )
+        else:
+            target_pct = 0.0
+            for k, v in (targets or {}).items():
+                if canonical_valeur(k) == asset:
+                    target_pct = float(v)
+                    break
+
+        target_value = total_val * (target_pct / 100)
+        target_qty = round(target_value / price) if price > 0 else 0
+        ecart = current_qty - target_qty
+        sim_rows.append({
+            "Valeur": asset,
+            "Cours (Prix)": price,
+            "Quantité actuelle": int(current_qty),
+            "Poids Actuel (%)": round(current_weight, 2),
+            "Quantité Cible": int(target_qty),
+            "Poids Cible (%)": round(target_pct, 2),
+            "Écart": int(ecart),
+        })
+
+    return pd.DataFrame(
+        sim_rows,
+        columns=[
+            "Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)",
+            "Quantité Cible", "Poids Cible (%)", "Écart",
+        ],
+    )
+
+
 def simulation_for_client_updated(client_name):
     """
     Updated simulation for a single portfolio.
@@ -767,45 +850,11 @@ def simulation_for_client_updated(client_name):
     if pf.empty:
         st.error("Portefeuille vide pour ce client.")
         return
+
     stocks_df = fetch_stocks()
-    total_val = 0.0
-    portfolio_assets = {}
-    for _, row in pf.iterrows():
-        asset = row["valeur"]
-        qty = float(row["quantité"])
-        price = lookup_stock_price(asset, stocks_df)
-        total_val += qty * price
-        portfolio_assets[asset] = {"qty": qty, "price": price}
-    # Include any asset from targets not in portfolio_assets.
-    for asset in targets.keys():
-        if asset not in portfolio_assets:
-            price = lookup_stock_price(asset, stocks_df)
-            portfolio_assets[asset] = {"qty": 0, "price": price}
-    # Build simulation rows
-    sim_rows = []
-    # Ensure Cash row is processed last.
-    assets_ordered = [a for a in portfolio_assets if a.lower() != "cash"] + (["Cash"] if "Cash" in portfolio_assets else [])
-    for asset in assets_ordered:
-        current_qty = portfolio_assets[asset]["qty"]
-        price = portfolio_assets[asset]["price"]
-        current_value = current_qty * price
-        current_weight = (current_value / total_val * 100) if total_val > 0 else 0
-        target_pct = targets.get(asset, 0)
-        if asset.lower() == "cash":
-            target_pct = 100 - sum(targets.values())
-        target_value = total_val * (target_pct / 100)
-        target_qty = round(target_value / price) if price > 0 else 0
-        ecart = current_qty - target_qty
-        sim_rows.append({
-            "Valeur": asset,
-            "Cours (Prix)": price,
-            "Quantité actuelle": current_qty,
-            "Poids Actuel (%)": round(current_weight, 2),
-            "Quantité Cible": target_qty,
-            "Poids Cible (%)": target_pct,
-            "Écart": ecart
-        })
-    sim_df = pd.DataFrame(sim_rows, columns=["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"])
+    portfolio_assets = _collect_simulation_assets(pf, targets, stocks_df)
+    total_val = sum(info["qty"] * info["price"] for info in portfolio_assets.values())
+    sim_df = _build_simulation_table(portfolio_assets, targets, total_val)
     st.dataframe(sim_df, use_container_width=True)
 
 
@@ -831,40 +880,10 @@ def simulation_for_aggregated(agg_pf, strategy):
     Uses the same columns as the single portfolio simulation.
     """
     targets = json.loads(strategy["targets"])
-    targets["Cash"] = 100 - sum(targets.values())
     stocks_df = fetch_stocks()
-    total_val = 0.0
-    portfolio_assets = {}
-    for _, row in agg_pf.iterrows():
-        asset = row["valeur"]
-        qty = float(row["quantité"])
-        price = lookup_stock_price(asset, stocks_df)
-        total_val += qty * price
-        portfolio_assets[asset] = {"qty": qty, "price": price}
-    # Ensure Cash row is at the bottom.
-    assets_ordered = [a for a in portfolio_assets if a.lower() != "cash"] + (["Cash"] if "Cash" in portfolio_assets else [])
-    sim_rows = []
-    for asset in assets_ordered:
-        current_qty = portfolio_assets[asset]["qty"]
-        price = portfolio_assets[asset]["price"]
-        current_value = current_qty * price
-        current_weight = (current_value / total_val * 100) if total_val > 0 else 0
-        target_pct = targets.get(asset, 0)
-        if asset.lower() == "cash":
-            target_pct = 100 - sum(targets[k] for k in targets if k.lower() != "cash")
-        target_value = total_val * (target_pct / 100)
-        target_qty = round(target_value / price) if price > 0 else 0
-        ecart = current_qty - target_qty
-        sim_rows.append({
-            "Valeur": asset,
-            "Cours (Prix)": price,
-            "Quantité actuelle": current_qty,
-            "Poids Actuel (%)": round(current_weight, 2),
-            "Quantité Cible": target_qty,
-            "Poids Cible (%)": target_pct,
-            "Écart": ecart
-        })
-    sim_df = pd.DataFrame(sim_rows, columns=["Valeur", "Cours (Prix)", "Quantité actuelle", "Poids Actuel (%)", "Quantité Cible", "Poids Cible (%)", "Écart"])
+    portfolio_assets = _collect_simulation_assets(agg_pf, targets, stocks_df)
+    total_val = sum(info["qty"] * info["price"] for info in portfolio_assets.values())
+    sim_df = _build_simulation_table(portfolio_assets, targets, total_val)
     st.dataframe(sim_df, use_container_width=True)
 
 
@@ -892,7 +911,11 @@ def simulation_stock_details(selected_stock, strategy, client_list):
     price = round(lookup_stock_price(selected_stock, stocks_df), 2)
 
     strategy_targets = json.loads(strategy["targets"])
-    target_pct = strategy_targets.get(selected_stock, 0)
+    target_pct = 0.0
+    for k, v in strategy_targets.items():
+        if canonical_valeur(k) == canonical_valeur(selected_stock):
+            target_pct = float(v)
+            break
     if selected_stock.lower() == "cash":
         target_pct = 100 - sum(strategy_targets.values())
     aggregated_qty = 0
@@ -910,7 +933,7 @@ def simulation_stock_details(selected_stock, strategy, client_list):
                 qty = float(row["quantité"])
                 p = lookup_stock_price(asset, stocks_df)
                 client_value += qty * p
-                if asset.lower() == selected_stock.lower():
+                if canonical_valeur(asset).lower() == canonical_valeur(selected_stock).lower():
                     current_qty = qty
                 if asset.lower() == "cash":
                     cash_available = qty
