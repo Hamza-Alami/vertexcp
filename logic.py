@@ -9,6 +9,7 @@ from db_utils import (
     portfolio_table,
     fetch_instruments,
     fetch_stocks,
+    lookup_stock_price,
     client_has_portfolio,
     create_performance_period,
     get_performance_periods_for_client,
@@ -52,9 +53,8 @@ def compute_poids_masi():
         return {}
 
     instr_renamed = instruments_df.rename(columns={"instrument_name": "valeur"})
-    merged = pd.merge(instr_renamed, stocks_df, on="valeur", how="left")
-
-    merged["cours"] = merged["cours"].fillna(0.0).astype(float)
+    merged = instr_renamed.copy()
+    merged["cours"] = merged["valeur"].apply(lambda v: lookup_stock_price(v, stocks_df))
     merged["nombre_de_titres"] = merged["nombre_de_titres"].fillna(0.0).astype(float)
     merged["facteur_flottant"] = merged["facteur_flottant"].fillna(0.0).astype(float)
 
