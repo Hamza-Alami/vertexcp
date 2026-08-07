@@ -108,7 +108,7 @@ _BMCE_NAME_BY_SYMBOL = {
     "MLE": "Maroc Leasing",
     "MNG": "Managem",
     "MOX": "Maghreb Oxygene",
-    "MSA": "Marsa Maroc",
+    "MSA": "Sodep-Marsa Maroc",
     "MUT": "Mutandis",
     "NKL": "Ennakl",
     "OUL": "Oulmes",
