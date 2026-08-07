@@ -122,7 +122,10 @@ def fetch_masi_from_cb() -> float:
 #       Fetching Stocks (Scrape + Supabase Cache)
 ##################################################
 
-CB_MARKET_URL = "https://www.casablanca-bourse.com/fr/live-market/marche-actions-groupement"
+BMCE_ACTIONS_URL = (
+    "https://www.bmcecapitalbourse.com/bkbbourse/lists/TK"
+    "?q=AE31180F8E3BE20E762758E81EDC1204"
+)
 
 # Freshness logic:
 # - Streamlit cache: 60s
@@ -141,21 +144,36 @@ def _parse_float_fr(x: str) -> float:
     except ValueError:
         return 0.0
 
+def _parse_price_cell(td) -> float:
+    """Extract numeric price from a BMCE table cell (prefers data-raw)."""
+    raw = td.get("data-raw")
+    if raw is not None and str(raw).strip():
+        try:
+            return float(str(raw).strip())
+        except ValueError:
+            return _parse_float_fr(raw)
+    return _parse_float_fr(td.get_text(" ", strip=True))
+
 def _scrape_cb_prices() -> pd.DataFrame:
     """
-    Scrape Casablanca Bourse Live Market page and return DataFrame: [valeur, cours]
-    Always appends Cash (cours=1.0)
+    Scrape BMCE Capital Bourse (Bourse de Casablanca / Actions) and return
+    DataFrame: [valeur, cours]. All stocks are present in the initial HTML
+    (client-side pagination only). Always appends Cash (cours=1.0).
     """
     headers = {
-        "User-Agent": "Mozilla/5.0 (Streamlit; IDBourse) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
     }
 
-    # Try SSL verified first, then fallback
     last_err: Optional[Exception] = None
     for verify_mode in (certifi.where(), False):
         try:
             r = requests.get(
-                CB_MARKET_URL,
+                BMCE_ACTIONS_URL,
                 timeout=20,
                 headers=headers,
                 verify=verify_mode,
@@ -172,49 +190,61 @@ def _scrape_cb_prices() -> pd.DataFrame:
         raise last_err or RuntimeError("Unknown scraping error")
 
     soup = BeautifulSoup(html, "lxml")
-    tables = soup.find_all("table")
+    table = soup.find("table", id="table2")
+    if table is None:
+        raise RuntimeError("BMCE Bourse table (#table2) not found on page")
 
-    rows = []
-    for table in tables:
-        tbody = table.find("tbody")
-        if not tbody:
-            continue
-
-        thead = table.find("thead")
-        header_cells = []
-        if thead:
-            header_cells = [th.get_text(" ", strip=True).lower() for th in thead.find_all("th")]
-
-        # Locate "Dernier cours" column if present
-        last_price_idx = None
-        for i, h in enumerate(header_cells):
-            if ("dernier" in h and "cours" in h) or (h.strip() == "dernier"):
-                last_price_idx = i
+    cours_idx = None
+    thead = table.find("thead")
+    if thead:
+        for i, th in enumerate(thead.find_all("th")):
+            data_key = (th.get("data-k") or "").upper()
+            label = th.get_text(" ", strip=True).lower()
+            if data_key == "LVAL_NORM" and "cours" in label:
+                cours_idx = i
                 break
 
+    rows = []
+    tbody = table.find("tbody")
+    if tbody:
         for tr in tbody.find_all("tr"):
             tds = tr.find_all("td")
             if not tds:
                 continue
 
-            name = tds[0].get_text(" ", strip=True)
+            name_cell = tr.find("td", class_="m_shortname")
+            if name_cell is None:
+                continue
+
+            name = (name_cell.get("data-raw") or name_cell.get_text(" ", strip=True)).strip()
             if not name:
                 continue
 
-            if last_price_idx is not None and last_price_idx < len(tds):
-                last_price_txt = tds[last_price_idx].get_text(" ", strip=True)
+            price = 0.0
+            if cours_idx is not None and cours_idx < len(tds):
+                price = _parse_price_cell(tds[cours_idx])
             else:
-                # Fallback to common layout (index 4)
-                last_price_txt = tds[4].get_text(" ", strip=True) if len(tds) > 4 else "0"
+                lval_cells = tr.find_all("td", class_="lval_norm")
+                for td in reversed(lval_cells):
+                    raw = td.get("data-raw", "")
+                    if raw and not str(raw).isdigit():
+                        price = _parse_price_cell(td)
+                        break
+                    if raw and len(str(raw)) <= 12:
+                        try:
+                            val = float(str(raw))
+                            if val < 1_000_000:
+                                price = val
+                                break
+                        except ValueError:
+                            pass
 
-            price = _parse_float_fr(last_price_txt)
             rows.append({"valeur": name, "cours": price})
 
     df = pd.DataFrame(rows).drop_duplicates(subset=["valeur"], keep="last")
     if df.empty:
         df = pd.DataFrame(columns=["valeur", "cours"])
 
-    # Always include Cash
     df = pd.concat([df, pd.DataFrame([{"valeur": "Cash", "cours": 1.0}])], ignore_index=True)
     return df[["valeur", "cours"]]
 
@@ -289,7 +319,7 @@ def _cached_fetch_stocks() -> pd.DataFrame:
     """
     Main entry:
       1) Try fresh cached prices from Supabase (market_prices)
-      2) Else scrape Casablanca Bourse
+      2) Else scrape BMCE Capital Bourse (Bourse de Casablanca Actions)
       3) Save to Supabase (best-effort)
     """
     df_db = _read_prices_from_supabase(max_age_seconds=SUPABASE_PRICES_MAX_AGE_SECONDS)
@@ -301,7 +331,7 @@ def _cached_fetch_stocks() -> pd.DataFrame:
         _upsert_prices_to_supabase(df)
         return df
     except Exception as e:
-        st.error(f"Failed to scrape Casablanca Bourse prices: {e}")
+        st.error(f"Failed to scrape BMCE Bourse prices: {e}")
         # Last fallback: try whatever is in Supabase even if stale (better than nothing)
         df_db_any = _read_prices_from_supabase(max_age_seconds=10**9)
         if not df_db_any.empty:
