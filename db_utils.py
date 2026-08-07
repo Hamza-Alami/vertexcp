@@ -1,3 +1,5 @@
+import json
+import re
 import pandas as pd
 import streamlit as st
 import requests
@@ -118,14 +120,22 @@ def fetch_masi_from_cb() -> float:
                 return 0.0
 
     return 0.0
-    ######################
-#       Fetching Stocks (Scrape + Supabase Cache)
+
+##################################################
+#     Casablanca Bourse — Live market (Actions)
 ##################################################
 
-BMCE_ACTIONS_URL = (
-    "https://www.bmcecapitalbourse.com/bkbbourse/lists/TK"
-    "?q=AE31180F8E3BE20E762758E81EDC1204"
-)
+CB_LIVE_ACTIONS_URL = "https://www.casablanca-bourse.com/live-market/actions"
+
+_CB_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    "Referer": "https://www.casablanca-bourse.com/",
+}
 
 # Freshness logic:
 # - Streamlit cache: 60s
@@ -144,102 +154,102 @@ def _parse_float_fr(x: str) -> float:
     except ValueError:
         return 0.0
 
-def _parse_price_cell(td) -> float:
-    """Extract numeric price from a BMCE table cell (prefers data-raw)."""
-    raw = td.get("data-raw")
-    if raw is not None and str(raw).strip():
-        try:
-            return float(str(raw).strip())
-        except ValueError:
-            return _parse_float_fr(raw)
-    return _parse_float_fr(td.get_text(" ", strip=True))
-
-def _scrape_cb_prices() -> pd.DataFrame:
-    """
-    Scrape BMCE Capital Bourse (Bourse de Casablanca / Actions) and return
-    DataFrame: [valeur, cours]. All stocks are present in the initial HTML
-    (client-side pagination only). Always appends Cash (cours=1.0).
-    """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
-    }
-
+def _fetch_cb_live_actions_html() -> str:
+    """Fetch Casablanca Bourse live actions page (browser headers, SSL fallback)."""
     last_err: Optional[Exception] = None
     for verify_mode in (certifi.where(), False):
         try:
             r = requests.get(
-                BMCE_ACTIONS_URL,
+                CB_LIVE_ACTIONS_URL,
                 timeout=20,
-                headers=headers,
+                headers=_CB_BROWSER_HEADERS,
                 verify=verify_mode,
             )
             r.raise_for_status()
-            html = r.text
-            break
+            return r.text
         except Exception as e:
             last_err = e
             if verify_mode is False:
                 raise
-            continue
-    else:
-        raise last_err or RuntimeError("Unknown scraping error")
+    raise last_err or RuntimeError("Unknown scraping error")
 
-    soup = BeautifulSoup(html, "lxml")
-    table = soup.find("table", id="table2")
-    if table is None:
-        raise RuntimeError("BMCE Bourse table (#table2) not found on page")
+def _parse_actions_from_drupal_json(html: str) -> list:
+    """Parse instrument tickers and Dernier prices from embedded Drupal settings."""
+    match = re.search(
+        r'<script type="application/json" data-drupal-selector="drupal-settings-json">(.*?)</script>',
+        html,
+        re.S,
+    )
+    if not match:
+        return []
 
-    cours_idx = None
-    thead = table.find("thead")
-    if thead:
-        for i, th in enumerate(thead.find_all("th")):
-            data_key = (th.get("data-k") or "").upper()
-            label = th.get_text(" ", strip=True).lower()
-            if data_key == "LVAL_NORM" and "cours" in label:
-                cours_idx = i
-                break
-
+    data = json.loads(match.group(1))
+    actions = data.get("live_market", {}).get("actions", [])
     rows = []
-    tbody = table.find("tbody")
+    for action in actions:
+        symbol = (action.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        try:
+            cours = float(action.get("dernierCours") or 0)
+        except (TypeError, ValueError):
+            cours = 0.0
+        rows.append({"valeur": symbol, "cours": cours})
+    return rows
+
+def _parse_actions_from_html(soup: BeautifulSoup) -> list:
+    """Fallback: parse #desktop-table or #mobile-cards when JSON is unavailable."""
+    rows = []
+
+    tbody = soup.find("tbody", id="table-body")
     if tbody:
         for tr in tbody.find_all("tr"):
+            link = tr.find("a", class_="hover-underline")
+            if not link:
+                continue
+            symbol = link.get_text(strip=True)
+            if not symbol:
+                continue
             tds = tr.find_all("td")
-            if not tds:
-                continue
+            # Columns: fav, expand, instrument, statut, sell qty/px, buy px/qty, Dernier, ...
+            price = _parse_float_fr(tds[8].get_text(" ", strip=True)) if len(tds) >= 9 else 0.0
+            rows.append({"valeur": symbol, "cours": price})
+        if rows:
+            return rows
 
-            name_cell = tr.find("td", class_="m_shortname")
-            if name_cell is None:
+    mobile_cards = soup.find("div", id="mobile-cards")
+    if mobile_cards:
+        for header in mobile_cards.select(".mobile-card-header[data-ticker]"):
+            symbol = (header.get("data-ticker") or "").strip()
+            if not symbol:
                 continue
-
-            name = (name_cell.get("data-raw") or name_cell.get_text(" ", strip=True)).strip()
-            if not name:
-                continue
-
             price = 0.0
-            if cours_idx is not None and cours_idx < len(tds):
-                price = _parse_price_cell(tds[cours_idx])
-            else:
-                lval_cells = tr.find_all("td", class_="lval_norm")
-                for td in reversed(lval_cells):
-                    raw = td.get("data-raw", "")
-                    if raw and not str(raw).isdigit():
-                        price = _parse_price_cell(td)
-                        break
-                    if raw and len(str(raw)) <= 12:
-                        try:
-                            val = float(str(raw))
-                            if val < 1_000_000:
-                                price = val
-                                break
-                        except ValueError:
-                            pass
+            for block in header.find_all("div", style=re.compile(r"text-align:\s*right")):
+                parts = block.find_all("div", recursive=False)
+                if len(parts) >= 2 and parts[0].get_text(strip=True) == "Dernier":
+                    price = _parse_float_fr(parts[1].get_text(" ", strip=True))
+                    break
+            rows.append({"valeur": symbol, "cours": price})
 
-            rows.append({"valeur": name, "cours": price})
+    return rows
+
+def _scrape_cb_prices() -> pd.DataFrame:
+    """
+    Scrape Casablanca Bourse live market (Actions) and return DataFrame [valeur, cours].
+    Uses embedded Drupal JSON (Instrument = ticker, Dernier = dernierCours); falls back
+    to #desktop-table / #mobile-cards HTML. Always appends Cash (cours=1.0).
+    """
+    html = _fetch_cb_live_actions_html()
+    rows = _parse_actions_from_drupal_json(html)
+
+    if not rows:
+        soup = BeautifulSoup(html, "lxml")
+        rows = _parse_actions_from_html(soup)
+
+    if not rows:
+        raise RuntimeError(
+            "Casablanca Bourse live market data not found (Drupal JSON and HTML table missing)"
+        )
 
     df = pd.DataFrame(rows).drop_duplicates(subset=["valeur"], keep="last")
     if df.empty:
@@ -319,7 +329,7 @@ def _cached_fetch_stocks() -> pd.DataFrame:
     """
     Main entry:
       1) Try fresh cached prices from Supabase (market_prices)
-      2) Else scrape BMCE Capital Bourse (Bourse de Casablanca Actions)
+      2) Else scrape Casablanca Bourse live market (Actions)
       3) Save to Supabase (best-effort)
     """
     df_db = _read_prices_from_supabase(max_age_seconds=SUPABASE_PRICES_MAX_AGE_SECONDS)
@@ -331,7 +341,7 @@ def _cached_fetch_stocks() -> pd.DataFrame:
         _upsert_prices_to_supabase(df)
         return df
     except Exception as e:
-        st.error(f"Failed to scrape BMCE Bourse prices: {e}")
+        st.error(f"Failed to scrape Casablanca Bourse prices: {e}")
         # Last fallback: try whatever is in Supabase even if stale (better than nothing)
         df_db_any = _read_prices_from_supabase(max_age_seconds=10**9)
         if not df_db_any.empty:
