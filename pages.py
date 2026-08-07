@@ -19,7 +19,8 @@ from db_utils import (
     get_performance_periods_for_client,
     create_performance_period,
     get_latest_performance_period_for_all_clients,
-    fetch_stocks
+    fetch_stocks,
+    lookup_stock_price,
 )
 from logic import (
     buy_shares,
@@ -102,8 +103,7 @@ def show_portfolio(client_name, read_only=False):
     # Recalculate columns
     for i, row in df.iterrows():
         val = str(row["valeur"])
-        match = stocks[stocks["valeur"] == val]
-        live_price = float(match["cours"].values[0]) if not match.empty else 0.0
+        live_price = lookup_stock_price(val, stocks)
         df.at[i, "cours"] = live_price
 
         qty_ = float(row.get("quantité", 0))
@@ -329,8 +329,7 @@ def page_inventory():
             for _, row in dfp.iterrows():
                 val = str(row["valeur"])
                 qty = float(row["quantité"])
-                match = stocks[stocks["valeur"] == val]
-                price = float(match["cours"].values[0]) if not match.empty else 0.0
+                price = lookup_stock_price(val, stocks)
                 total_ = qty * price
                 portf_val += total_
                 master_data[val]["quantity"] += qty
@@ -345,8 +344,7 @@ def page_inventory():
     sum_stocks_val = 0.0
 
     for val, info in master_data.items():
-        match = stocks[stocks["valeur"] == val]
-        price = float(match["cours"].values[0]) if not match.empty else 0.0
+        price = lookup_stock_price(val, stocks)
         agg_val = info["quantity"] * price
         sum_stocks_val += agg_val
         rows.append({
@@ -534,8 +532,7 @@ def page_performance_fees():
                 for _, prow in pdf.iterrows():
                     val = str(prow["valeur"])
                     qty_ = float(prow["quantité"])
-                    matchp = stx[stx["valeur"] == val]
-                    px_ = float(matchp["cours"].values[0]) if not matchp.empty else 0.0
+                    px_ = lookup_stock_price(val, stx)
                     cur_val += (qty_ * px_)
 
                 gains_port = cur_val - portfolio_start
@@ -619,8 +616,7 @@ def page_performance_fees():
                     for _, prow2 in pdf2.iterrows():
                         v2= str(prow2["valeur"])
                         q2= float(prow2["quantité"])
-                        mt2= stx2[stx2["valeur"]== v2]
-                        px2= float(mt2["cours"].values[0]) if not mt2.empty else 0.0
+                        px2= lookup_stock_price(v2, stx2)
                         cur_val2 += (q2*px2)
 
                 # perf client
@@ -777,22 +773,13 @@ def simulation_for_client_updated(client_name):
     for _, row in pf.iterrows():
         asset = row["valeur"]
         qty = float(row["quantité"])
-        # If asset not in portfolio, try fetching its price from stocks_df
-        match = stocks_df[stocks_df["valeur"] == asset]
-        if not match.empty:
-            price = float(match["cours"].iloc[0])
-        else:
-            price = 0.0
+        price = lookup_stock_price(asset, stocks_df)
         total_val += qty * price
         portfolio_assets[asset] = {"qty": qty, "price": price}
     # Include any asset from targets not in portfolio_assets.
     for asset in targets.keys():
         if asset not in portfolio_assets:
-            match = stocks_df[stocks_df["valeur"] == asset]
-            if not match.empty:
-                price = float(match["cours"].iloc[0])
-            else:
-                price = 0.0
+            price = lookup_stock_price(asset, stocks_df)
             portfolio_assets[asset] = {"qty": 0, "price": price}
     # Build simulation rows
     sim_rows = []
@@ -851,8 +838,7 @@ def simulation_for_aggregated(agg_pf, strategy):
     for _, row in agg_pf.iterrows():
         asset = row["valeur"]
         qty = float(row["quantité"])
-        match = stocks_df[stocks_df["valeur"] == asset]
-        price = 1.0 if asset.lower() == "cash" else (float(match["cours"].iloc[0]) if not match.empty else 0.0)
+        price = lookup_stock_price(asset, stocks_df)
         total_val += qty * price
         portfolio_assets[asset] = {"qty": qty, "price": price}
     # Ensure Cash row is at the bottom.
@@ -903,11 +889,7 @@ def simulation_stock_details(selected_stock, strategy, client_list):
          - "Cash disponible" (2 decimals)
     """
     stocks_df = fetch_stocks()
-    match = stocks_df[stocks_df["valeur"].str.lower() == selected_stock.lower()]
-    if not match.empty:
-        price = round(float(match["cours"].iloc[0]), 2)
-    else:
-        price = 0.0
+    price = round(lookup_stock_price(selected_stock, stocks_df), 2)
 
     strategy_targets = json.loads(strategy["targets"])
     target_pct = strategy_targets.get(selected_stock, 0)
@@ -926,8 +908,7 @@ def simulation_stock_details(selected_stock, strategy, client_list):
             for _, row in pf.iterrows():
                 asset = row["valeur"]
                 qty = float(row["quantité"])
-                m = stocks_df[stocks_df["valeur"].str.lower() == asset.lower()]
-                p = 1.0 if asset.lower() == "cash" else (float(m["cours"].iloc[0]) if not m.empty else 0.0)
+                p = lookup_stock_price(asset, stocks_df)
                 client_value += qty * p
                 if asset.lower() == selected_stock.lower():
                     current_qty = qty
@@ -1216,8 +1197,7 @@ def page_reporting():
     for _, prow in df_portfolio.iterrows():
         val = str(prow["valeur"])
         qty_ = float(prow["quantité"])
-        matchp = stx[stx["valeur"] == val]
-        px_ = float(matchp["cours"].values[0]) if not matchp.empty else 0.0
+        px_ = lookup_stock_price(val, stx)
         cur_val += (qty_ * px_)
 
     gains_port = cur_val - portfolio_start
