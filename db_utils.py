@@ -142,6 +142,151 @@ _CB_BROWSER_HEADERS = {
 # - Supabase cached prices considered fresh for: 180s
 SUPABASE_PRICES_MAX_AGE_SECONDS = 180
 
+# Portfolios / instruments use BMCE-style short names (e.g. "Addoha"), not tickers ("ADH").
+# Map Casablanca Bourse symbols back to those labels for merge compatibility.
+_BMCE_NAME_BY_SYMBOL = {
+    "ADH": "Addoha",
+    "ADI": "Alliances",
+    "AFI": "Afric Indus.",
+    "AFM": "AFMA",
+    "AKT": "Akdital",
+    "ALM": "Aluminium Maroc",
+    "ARD": "Aradei Capital",
+    "ATH": "Auto Hall",
+    "ATL": "ATLANTASANAD",
+    "ATW": "Attijariwafa Bank",
+    "BCI": "BMCI",
+    "BCP": "BCP",
+    "BOA": "BoA",
+    "CAP": "Cash Plus",
+    "CDM": "CDM",
+    "CFG": "CFG Bank",
+    "CIH": "CIH",
+    "CMA": "Ciments Maroc",
+    "CMG": "CMGP GROUP",
+    "COL": "Colorado",
+    "CRS": "Cartier Saada",
+    "CSR": "COSUMAR",
+    "CTM": "CTM",
+    "DHO": "Delta Holding",
+    "DRI": "Dari Couspate",
+    "DWY": "DISWAY",
+    "DYT": "Disty Technolog",
+    "FBR": "FENIE BROSSETTE",
+    "GAZ": "Afriquia Gaz",
+    "GTM": "SGTM",
+    "HPS": "HPS",
+    "IAM": "Maroc Telecom",
+    "IBC": "IBMaroc.com",
+    "IMO": "Immorente",
+    "INV": "INVOLYS",
+    "JET": "Jet Contractors",
+    "LBV": "LABEL VIE",
+    "LES": "Lesieur Cristal",
+    "LHM": "Holcim Maroc",
+    "M2M": "M2M Group",
+    "MAB": "Maghrebail",
+    "MDP": "Med Paper",
+    "MIC": "Microdata",
+    "MLE": "Maroc Leasing",
+    "MNG": "Managem",
+    "MOX": "Maghreb Oxygene",
+    "MSA": "Marsa Maroc",
+    "MUT": "Mutandis",
+    "NKL": "Ennakl",
+    "OUL": "Oulmes",
+    "RDS": "Resid Dar Saada",
+    "REB": "Rebab Company",
+    "RIS": "Risma",
+    "S2M": "S2M",
+    "SAH": "Sanlam Maroc",
+    "SBM": "Ste Boissons",
+    "SID": "Sonasid",
+    "SLF": "SALAFIN",
+    "SMI": "SMI",
+    "SNA": "SNA",
+    "SNP": "SNEP",
+    "SOT": "SOTHEMA",
+    "SRM": "SRM",
+    "STR": "STROC Indus.",
+    "T2S": "T2S Gro Holding",
+    "TGC": "TGCC",
+    "TMA": "TotalEnergie MM",
+    "TQM": "TAQA Morocco",
+    "VCN": "Vicenne",
+    "WAA": "Wafa Assur",
+    "ZDJ": "Zellidja",
+}
+_SYMBOL_BY_BMCE_NAME = {v: k for k, v in _BMCE_NAME_BY_SYMBOL.items()}
+
+
+def _normalize_valeur_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).strip().lower())
+
+
+def _portfolio_valeur_for_symbol(symbol: str, emetteur_fr: str = "") -> str:
+    """Return the portfolio-facing label for a Casablanca Bourse ticker."""
+    sym = (symbol or "").strip().upper()
+    if sym in _BMCE_NAME_BY_SYMBOL:
+        return _BMCE_NAME_BY_SYMBOL[sym]
+    if emetteur_fr:
+        return emetteur_fr.strip()
+    return sym
+
+
+def lookup_stock_price(valeur: str, stocks_df: pd.DataFrame) -> float:
+    """
+    Resolve a live price for a portfolio/instrument label.
+    Handles BMCE short names, tickers, and case differences.
+    """
+    if valeur is None:
+        return 0.0
+    val = str(valeur).strip()
+    if not val or val.lower() == "cash":
+        return 1.0
+    if stocks_df is None or stocks_df.empty:
+        return 0.0
+
+    candidates = {val, val.lower(), val.upper()}
+    sym = _SYMBOL_BY_BMCE_NAME.get(val)
+    if sym:
+        candidates.add(sym)
+        candidates.add(sym.lower())
+
+    for key in candidates:
+        match = stocks_df[stocks_df["valeur"] == key]
+        if not match.empty:
+            return float(match["cours"].iloc[0])
+
+    if "symbol" in stocks_df.columns:
+        for key in candidates:
+            match = stocks_df[stocks_df["symbol"].str.upper() == str(key).upper()]
+            if not match.empty:
+                return float(match["cours"].iloc[0])
+
+    target = _normalize_valeur_key(val)
+    for _, row in stocks_df.iterrows():
+        for col in ("valeur", "symbol", "name"):
+            if col not in stocks_df.columns:
+                continue
+            cell = row.get(col)
+            if cell is None:
+                continue
+            if _normalize_valeur_key(cell) == target:
+                return float(row["cours"])
+    return 0.0
+
+
+def _supabase_cache_looks_like_tickers(df: pd.DataFrame) -> bool:
+    """Detect stale cache rows keyed by tickers instead of portfolio labels."""
+    if df is None or df.empty or "valeur" not in df.columns:
+        return False
+    non_cash = df[df["valeur"].astype(str).str.lower() != "cash"]["valeur"].astype(str)
+    if non_cash.empty:
+        return False
+    ticker_like = non_cash.str.fullmatch(r"[A-Z0-9]{2,5}")
+    return ticker_like.mean() >= 0.8
+
 def _parse_float_fr(x: str) -> float:
     if x is None:
         return 0.0
@@ -187,14 +332,20 @@ def _parse_actions_from_drupal_json(html: str) -> list:
     actions = data.get("live_market", {}).get("actions", [])
     rows = []
     for action in actions:
-        symbol = (action.get("symbol") or "").strip()
+        symbol = (action.get("symbol") or "").strip().upper()
         if not symbol:
             continue
         try:
             cours = float(action.get("dernierCours") or 0)
         except (TypeError, ValueError):
             cours = 0.0
-        rows.append({"valeur": symbol, "cours": cours})
+        emetteur_fr = (action.get("emetteur") or {}).get("fr") or ""
+        rows.append({
+            "symbol": symbol,
+            "name": emetteur_fr.strip(),
+            "valeur": _portfolio_valeur_for_symbol(symbol, emetteur_fr),
+            "cours": cours,
+        })
     return rows
 
 def _parse_actions_from_html(soup: BeautifulSoup) -> list:
@@ -207,20 +358,25 @@ def _parse_actions_from_html(soup: BeautifulSoup) -> list:
             link = tr.find("a", class_="hover-underline")
             if not link:
                 continue
-            symbol = link.get_text(strip=True)
+            symbol = link.get_text(strip=True).upper()
             if not symbol:
                 continue
             tds = tr.find_all("td")
             # Columns: fav, expand, instrument, statut, sell qty/px, buy px/qty, Dernier, ...
             price = _parse_float_fr(tds[8].get_text(" ", strip=True)) if len(tds) >= 9 else 0.0
-            rows.append({"valeur": symbol, "cours": price})
+            rows.append({
+                "symbol": symbol,
+                "name": "",
+                "valeur": _portfolio_valeur_for_symbol(symbol),
+                "cours": price,
+            })
         if rows:
             return rows
 
     mobile_cards = soup.find("div", id="mobile-cards")
     if mobile_cards:
         for header in mobile_cards.select(".mobile-card-header[data-ticker]"):
-            symbol = (header.get("data-ticker") or "").strip()
+            symbol = (header.get("data-ticker") or "").strip().upper()
             if not symbol:
                 continue
             price = 0.0
@@ -229,7 +385,12 @@ def _parse_actions_from_html(soup: BeautifulSoup) -> list:
                 if len(parts) >= 2 and parts[0].get_text(strip=True) == "Dernier":
                     price = _parse_float_fr(parts[1].get_text(" ", strip=True))
                     break
-            rows.append({"valeur": symbol, "cours": price})
+            rows.append({
+                "symbol": symbol,
+                "name": "",
+                "valeur": _portfolio_valeur_for_symbol(symbol),
+                "cours": price,
+            })
 
     return rows
 
@@ -255,8 +416,10 @@ def _scrape_cb_prices() -> pd.DataFrame:
     if df.empty:
         df = pd.DataFrame(columns=["valeur", "cours"])
 
-    df = pd.concat([df, pd.DataFrame([{"valeur": "Cash", "cours": 1.0}])], ignore_index=True)
-    return df[["valeur", "cours"]]
+    cash_row = {"symbol": "CASH", "name": "Cash", "valeur": "Cash", "cours": 1.0}
+    df = pd.concat([df, pd.DataFrame([cash_row])], ignore_index=True)
+    cols = [c for c in ("symbol", "name", "valeur", "cours") if c in df.columns]
+    return df[cols]
 
 def _read_prices_from_supabase(max_age_seconds: int = SUPABASE_PRICES_MAX_AGE_SECONDS) -> pd.DataFrame:
     """
@@ -333,7 +496,7 @@ def _cached_fetch_stocks() -> pd.DataFrame:
       3) Save to Supabase (best-effort)
     """
     df_db = _read_prices_from_supabase(max_age_seconds=SUPABASE_PRICES_MAX_AGE_SECONDS)
-    if not df_db.empty:
+    if not df_db.empty and not _supabase_cache_looks_like_tickers(df_db):
         return df_db
 
     try:
