@@ -114,7 +114,7 @@ _BMCE_NAME_BY_SYMBOL = {
     "OUL": "Oulmes",
     "RDS": "RESIDENCES DAR SAADA",
     "REB": "Rebab Company",
-    "RIS": "Risma",
+    "RIS": "RISMA",
     "S2M": "S2M",
     "SAH": "Sanlam Maroc",
     "SBM": "Ste Boissons",
