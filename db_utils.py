@@ -108,11 +108,11 @@ _BMCE_NAME_BY_SYMBOL = {
     "MLE": "Maroc Leasing",
     "MNG": "Managem",
     "MOX": "Maghreb Oxygene",
-    "MSA": "Sodep-Marsa Maroc",
+    "MSA": "Marsa Maroc",
     "MUT": "Mutandis",
     "NKL": "Ennakl",
     "OUL": "Oulmes",
-    "RDS": "Resid Dar Saada",
+    "RDS": "RESIDENCES DAR SAADA",
     "REB": "Rebab Company",
     "RIS": "Risma",
     "S2M": "S2M",
@@ -135,6 +135,27 @@ _BMCE_NAME_BY_SYMBOL = {
     "ZDJ": "Zellidja",
 }
 _SYMBOL_BY_BMCE_NAME = {v: k for k, v in _BMCE_NAME_BY_SYMBOL.items()}
+
+# Older portfolio DB rows may use labels that differ from BMCE short names.
+_LEGACY_PORTFOLIO_ALIASES = {
+    "Resid Dar Saada": "RESIDENCES DAR SAADA",
+    "Resid Dar saada": "RESIDENCES DAR SAADA",
+    "resid dar saada": "RESIDENCES DAR SAADA",
+}
+
+
+def _legacy_portfolio_label(valeur: str) -> str:
+    """Map known legacy portfolio labels to the canonical scraper label."""
+    val = str(valeur).strip()
+    if not val:
+        return val
+    if val in _LEGACY_PORTFOLIO_ALIASES:
+        return _LEGACY_PORTFOLIO_ALIASES[val]
+    lower = val.lower()
+    for old, new in _LEGACY_PORTFOLIO_ALIASES.items():
+        if old.lower() == lower:
+            return new
+    return val
 
 
 def _normalize_valeur_key(value: str) -> str:
@@ -165,11 +186,11 @@ def canonical_valeur(valeur: str) -> str:
         return _BMCE_NAME_BY_SYMBOL[sym]
     if val in _SYMBOL_BY_BMCE_NAME:
         return val
-    return val
+    return _legacy_portfolio_label(val)
 
 
 def _enrich_stocks_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure symbol/name columns exist so lookups work with Supabase cache rows."""
+    """Ensure symbol/name/variation/volume columns exist so lookups & market UI work."""
     if df is None or df.empty:
         return df
     out = df.copy()
@@ -179,6 +200,12 @@ def _enrich_stocks_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         )
     if "name" not in out.columns:
         out["name"] = ""
+    if "variation" not in out.columns:
+        out["variation"] = 0.0
+    if "volume" not in out.columns:
+        out["volume"] = 0.0
+    out["variation"] = out["variation"].apply(lambda x: _safe_float(x))
+    out["volume"] = out["volume"].apply(lambda x: _safe_float(x))
     return out
 
 
@@ -196,7 +223,7 @@ def lookup_stock_price(valeur: str, stocks_df: pd.DataFrame) -> float:
         return 0.0
 
     canonical = canonical_valeur(val)
-    candidates = {val, val.lower(), val.upper(), canonical}
+    candidates = {val, val.lower(), val.upper(), canonical, _legacy_portfolio_label(val)}
     sym = _SYMBOL_BY_BMCE_NAME.get(val) or _SYMBOL_BY_BMCE_NAME.get(canonical)
     if sym:
         candidates.add(sym)
@@ -296,8 +323,26 @@ def _parse_drupal_settings_json(html: str) -> dict:
     return json.loads(match.group(1))
 
 
-def _parse_masi_from_drupal_json(html: str) -> float:
-    """Parse MASI from embedded live_market.indices JSON."""
+def _empty_masi_details() -> dict:
+    return {
+        "value": 0.0,
+        "change_pct": 0.0,
+        "change_ytd": 0.0,
+        "volume": 0.0,
+    }
+
+
+def _safe_float(x, default: float = 0.0) -> float:
+    try:
+        if x is None:
+            return default
+        return float(x)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_masi_details_from_drupal_json(html: str) -> dict:
+    """Parse MASI value / variation / YTD from embedded live_market.indices JSON."""
     data = _parse_drupal_settings_json(html)
     indices = data.get("live_market", {}).get("indices", {})
     buckets = []
@@ -313,58 +358,110 @@ def _parse_masi_from_drupal_json(html: str) -> float:
             code = (item.get("code") or item.get("symbol") or "").strip().upper()
             label_fr = ((item.get("label") or {}).get("fr") or "").strip().upper()
             if code == "MASI" or label_fr == "MASI":
-                try:
-                    return float(item.get("value") or 0)
-                except (TypeError, ValueError):
-                    return 0.0
-    return 0.0
+                return {
+                    "value": _safe_float(item.get("value")),
+                    "change_pct": _safe_float(item.get("change_pct")),
+                    "change_ytd": _safe_float(item.get("change_ytd")),
+                    "volume": _safe_float(item.get("volume")),
+                }
+    return _empty_masi_details()
 
 
-def _parse_masi_from_html(soup: BeautifulSoup) -> float:
-    """Fallback: parse MASI from index cards or indices table."""
+def _parse_masi_details_from_html(soup: BeautifulSoup) -> dict:
+    """Fallback: parse MASI card / table (value, variation %, YTD)."""
+    out = _empty_masi_details()
+
     for card in soup.select(".index-card"):
         name_el = card.select_one(".index-card-name")
-        if name_el and name_el.get_text(strip=True).upper() == "MASI":
-            val_el = card.select_one(".index-card-value")
-            if val_el:
-                return _parse_float_fr(val_el.get_text(" ", strip=True))
+        if not name_el or name_el.get_text(strip=True).upper() != "MASI":
+            continue
+        val_el = card.select_one(".index-card-value")
+        if val_el:
+            out["value"] = _parse_float_fr(val_el.get_text(" ", strip=True))
+        badge = card.select_one(".change-badge")
+        if badge:
+            out["change_pct"] = _parse_float_fr(
+                badge.get_text(" ", strip=True).replace("%", "").replace("▲", "").replace("▼", "")
+            )
+        ytd = card.select_one(".index-card-ytd-val")
+        if ytd:
+            out["change_ytd"] = _parse_float_fr(ytd.get_text(" ", strip=True).replace("%", ""))
+        return out
 
     tbody = soup.find("tbody", id="table-body")
     if tbody:
         for tr in tbody.find_all("tr"):
             tds = tr.find_all("td")
             if len(tds) >= 2 and tds[0].get_text(strip=True).upper() == "MASI":
-                return _parse_float_fr(tds[1].get_text(" ", strip=True))
-    return 0.0
+                out["value"] = _parse_float_fr(tds[1].get_text(" ", strip=True))
+                if len(tds) >= 3:
+                    out["change_pct"] = _parse_float_fr(
+                        tds[2].get_text(" ", strip=True).replace("%", "").replace("▲", "").replace("▼", "")
+                    )
+                if len(tds) >= 4:
+                    out["change_ytd"] = _parse_float_fr(
+                        tds[3].get_text(" ", strip=True).replace("%", "")
+                    )
+                return out
+    return out
 
 
-def _scrape_masi_from_cb() -> float:
-    """Scrape MASI from Casablanca Bourse live-market indices page."""
-    html = _fetch_cb_page(CB_LIVE_INDICES_URL)
-    value = _parse_masi_from_drupal_json(html)
-    if value > 0:
-        return value
-
-    soup = BeautifulSoup(html, "lxml")
-    value = _parse_masi_from_html(soup)
-    if value > 0:
-        return value
-
-    raise RuntimeError("MASI index value not found on Casablanca Bourse indices page")
-
-
-@st.cache_data(ttl=60)
-def _cached_fetch_masi() -> float:
+def _market_volume_from_actions() -> float:
+    """Sum traded volumes from the live actions page (MAD)."""
     try:
-        return _scrape_masi_from_cb()
-    except Exception as e:
-        st.warning(f"⚠️ MASI indisponible: {e}")
+        html = _fetch_cb_live_actions_html()
+        data = _parse_drupal_settings_json(html)
+        actions = data.get("live_market", {}).get("actions", [])
+        total = 0.0
+        for action in actions:
+            total += _safe_float(action.get("volume"))
+        return total
+    except Exception:
         return 0.0
 
 
+def _scrape_masi_details_from_cb() -> dict:
+    """
+    Scrape MASI from https://www.casablanca-bourse.com/live-market/indices
+    Returns dict with value, change_pct, change_ytd, volume.
+    """
+    html = _fetch_cb_page(CB_LIVE_INDICES_URL)
+    details = _parse_masi_details_from_drupal_json(html)
+    if details["value"] <= 0:
+        soup = BeautifulSoup(html, "lxml")
+        details = _parse_masi_details_from_html(soup)
+
+    if details["value"] <= 0:
+        raise RuntimeError("MASI index value not found on Casablanca Bourse indices page")
+
+    # Indices JSON has no volume; use aggregate stock market volume as proxy.
+    if details.get("volume", 0) <= 0:
+        details["volume"] = _market_volume_from_actions()
+
+    return details
+
+
+@st.cache_data(ttl=60)
+def _cached_fetch_masi_details() -> dict:
+    try:
+        return _scrape_masi_details_from_cb()
+    except Exception as e:
+        st.warning(f"⚠️ MASI indisponible: {e}")
+        return _empty_masi_details()
+
+
+def fetch_masi_details() -> dict:
+    """
+    Return live MASI details:
+      {value, change_pct, change_ytd, volume}
+    Numbers are plain floats suitable for calculations.
+    """
+    return _cached_fetch_masi_details()
+
+
 def fetch_masi_from_cb() -> float:
-    """Return the live MASI index as a float (e.g. 18715.05)."""
-    return _cached_fetch_masi()
+    """Return the live MASI index value as a float (e.g. 18715.05)."""
+    return float(fetch_masi_details().get("value") or 0.0)
 
 def _parse_actions_from_drupal_json(html: str) -> list:
     """Parse instrument tickers and Dernier prices from embedded Drupal settings."""
@@ -393,6 +490,8 @@ def _parse_actions_from_drupal_json(html: str) -> list:
             "name": emetteur_fr.strip(),
             "valeur": _portfolio_valeur_for_symbol(symbol, emetteur_fr),
             "cours": cours,
+            "variation": _safe_float(action.get("variation")),
+            "volume": _safe_float(action.get("volume")),
         })
     return rows
 
@@ -417,6 +516,8 @@ def _parse_actions_from_html(soup: BeautifulSoup) -> list:
                 "name": "",
                 "valeur": _portfolio_valeur_for_symbol(symbol),
                 "cours": price,
+                "variation": 0.0,
+                "volume": 0.0,
             })
         if rows:
             return rows
@@ -438,15 +539,16 @@ def _parse_actions_from_html(soup: BeautifulSoup) -> list:
                 "name": "",
                 "valeur": _portfolio_valeur_for_symbol(symbol),
                 "cours": price,
+                "variation": 0.0,
+                "volume": 0.0,
             })
 
     return rows
 
 def _scrape_cb_prices() -> pd.DataFrame:
     """
-    Scrape Casablanca Bourse live market (Actions) and return DataFrame [valeur, cours].
-    Uses embedded Drupal JSON (Instrument = ticker, Dernier = dernierCours); falls back
-    to #desktop-table / #mobile-cards HTML. Always appends Cash (cours=1.0).
+    Scrape Casablanca Bourse live market (Actions) and return DataFrame
+    [valeur, cours, variation, volume] (+ symbol/name). Always appends Cash.
     """
     html = _fetch_cb_live_actions_html()
     rows = _parse_actions_from_drupal_json(html)
@@ -462,11 +564,23 @@ def _scrape_cb_prices() -> pd.DataFrame:
 
     df = pd.DataFrame(rows).drop_duplicates(subset=["valeur"], keep="last")
     if df.empty:
-        df = pd.DataFrame(columns=["valeur", "cours"])
+        df = pd.DataFrame(columns=["symbol", "name", "valeur", "cours", "variation", "volume"])
 
-    cash_row = {"symbol": "CASH", "name": "Cash", "valeur": "Cash", "cours": 1.0}
+    if "variation" not in df.columns:
+        df["variation"] = 0.0
+    if "volume" not in df.columns:
+        df["volume"] = 0.0
+
+    cash_row = {
+        "symbol": "CASH",
+        "name": "Cash",
+        "valeur": "Cash",
+        "cours": 1.0,
+        "variation": 0.0,
+        "volume": 0.0,
+    }
     df = pd.concat([df, pd.DataFrame([cash_row])], ignore_index=True)
-    cols = [c for c in ("symbol", "name", "valeur", "cours") if c in df.columns]
+    cols = [c for c in ("symbol", "name", "valeur", "cours", "variation", "volume") if c in df.columns]
     return df[cols]
 
 def _read_prices_from_supabase(max_age_seconds: int = SUPABASE_PRICES_MAX_AGE_SECONDS) -> pd.DataFrame:
@@ -539,28 +653,26 @@ def _upsert_prices_to_supabase(df: pd.DataFrame) -> None:
 def _cached_fetch_stocks() -> pd.DataFrame:
     """
     Main entry:
-      1) Try fresh cached prices from Supabase (market_prices)
-      2) Else scrape Casablanca Bourse live market (Actions)
-      3) Save to Supabase (best-effort)
+      1) Scrape Casablanca Bourse live market (Actions) for cours/variation/volume
+      2) Save prices to Supabase (best-effort)
+      3) On scrape failure, fall back to Supabase cache
     """
-    df_db = _read_prices_from_supabase(max_age_seconds=SUPABASE_PRICES_MAX_AGE_SECONDS)
-    if not df_db.empty and not _supabase_cache_looks_like_tickers(df_db):
-        return _enrich_stocks_dataframe(df_db)
-
     try:
         df = _scrape_cb_prices()
         _upsert_prices_to_supabase(df)
         return _enrich_stocks_dataframe(df)
     except Exception as e:
         st.error(f"Failed to scrape Casablanca Bourse prices: {e}")
-        # Last fallback: try whatever is in Supabase even if stale (better than nothing)
+        df_db = _read_prices_from_supabase(max_age_seconds=SUPABASE_PRICES_MAX_AGE_SECONDS)
+        if not df_db.empty and not _supabase_cache_looks_like_tickers(df_db):
+            return _enrich_stocks_dataframe(df_db)
         df_db_any = _read_prices_from_supabase(max_age_seconds=10**9)
         if not df_db_any.empty:
             return _enrich_stocks_dataframe(df_db_any)
-        return pd.DataFrame(columns=["symbol", "name", "valeur", "cours"])
+        return pd.DataFrame(columns=["symbol", "name", "valeur", "cours", "variation", "volume"])
 
 def fetch_stocks() -> pd.DataFrame:
-    """Return the live/cached stocks DataFrame with columns [valeur, cours, symbol, name] + Cash."""
+    """Return live/cached stocks [valeur, cours, variation, volume, symbol, name] + Cash."""
     return _enrich_stocks_dataframe(_cached_fetch_stocks())
 
 def fetch_instruments():
