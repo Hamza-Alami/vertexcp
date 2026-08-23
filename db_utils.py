@@ -80,6 +80,7 @@ _BMCE_NAME_BY_SYMBOL = {
     "CFG": "CFG Bank",
     "CIH": "CIH",
     "CMA": "Ciments Maroc",
+    "CMT": "MINIERE TOUISSIT",
     "CMG": "CMGP GROUP",
     "COL": "Colorado",
     "CRS": "Cartier Saada",
