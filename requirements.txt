@@ -1,5 +1,6 @@
 streamlit==1.42.0
 supabase==1.1.0
+anyio==4.6.2
 pandas==2.2.0
 requests==2.31.0
 matplotlib==3.9.2
