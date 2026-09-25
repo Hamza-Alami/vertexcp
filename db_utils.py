@@ -131,7 +131,7 @@ _BMCE_NAME_BY_SYMBOL = {
     "TGC": "TGCC",
     "TMA": "TotalEnergie MM",
     "TQM": "TAQA Morocco",
-    "VCN": "Vicenne",
+    "VCN": "VICENNE",
     "WAA": "Wafa Assur",
     "ZDJ": "Zellidja",
 }
